@@ -1,0 +1,1670 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#1b1d24">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="KFマップ">
+<title>キーフレームマップ</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%231b1d24'/%3E%3Crect x='72' y='96' width='150' height='110' rx='18' fill='%234da3ff'/%3E%3Crect x='290' y='306' width='150' height='110' rx='18' fill='%23ffb84d'/%3E%3Cpath d='M222 160 C300 160 300 260 366 296' stroke='%23fff' stroke-width='22' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+  :root{--bg:#1b1d24;--panel:#2a2d38;--panel2:#363a48;--fg:#e8ecf4;--accent:#ffb84d;--blue:#4da3ff}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);overflow:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif;
+    -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;overscroll-behavior:none}
+  #cv{position:fixed;inset:0;width:100%;height:100%;touch-action:none;display:block}
+  #ui{position:fixed;left:calc(8px + env(safe-area-inset-left));top:calc(8px + env(safe-area-inset-top));
+    display:flex;flex-direction:column;gap:6px;z-index:10}
+  .row{display:flex;gap:6px}
+  .row[hidden]{display:none}
+  button{font:inherit;color:var(--fg);background:var(--panel);border:1px solid #444a5c;border-radius:10px;
+    min-height:44px;padding:0 14px;cursor:pointer;opacity:.96}
+  button:active{background:var(--panel2)}
+  button:disabled{opacity:.4}
+  button.on{border-color:var(--accent);color:var(--accent)}
+  #popup{position:fixed;z-index:30;display:flex;flex-direction:column;gap:4px;padding:6px;
+    background:#23262f;border:1px solid #444a5c;border-radius:12px;box-shadow:0 8px 24px #0008;min-width:160px}
+  #popup[hidden]{display:none}
+  #popup button{text-align:left;border:none;background:transparent;min-height:42px;white-space:nowrap}
+  #popup button:active{background:var(--panel2)}
+  #popup button.on{color:var(--accent)}
+  #dlg{position:fixed;inset:0;z-index:40;background:#0008;display:flex;align-items:center;justify-content:center}
+  #dlg[hidden]{display:none}
+  .card{background:#23262f;border:1px solid #444a5c;border-radius:14px;padding:16px;width:min(340px,90vw);
+    display:flex;flex-direction:column;gap:12px}
+  .card input{font:inherit;font-size:16px;color:var(--fg);background:var(--bg);border:1px solid #444a5c;
+    border-radius:8px;padding:10px;width:100%;-webkit-user-select:text;user-select:text}
+  .btns{display:flex;gap:8px;flex-wrap:wrap}
+  .btns button{flex:1}
+  #dlgOk{background:var(--blue);color:#06121f;border-color:var(--blue)}
+  #toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);
+    background:#000c;color:#fff;padding:10px 16px;border-radius:20px;font-size:13px;z-index:50;
+    pointer-events:none;opacity:0;transition:opacity .2s;max-width:90vw;text-align:center}
+  #toast.show{opacity:1}
+  /* 右上ボタン */
+  #ui2{position:fixed;right:calc(8px + env(safe-area-inset-right));top:calc(8px + env(safe-area-inset-top));
+    display:flex;gap:6px;z-index:10}
+  .ib{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:0 10px;
+    font:inherit;font-size:18px;line-height:1;color:var(--fg);background:var(--panel);border:1px solid #444a5c;
+    border-radius:10px;text-decoration:none;cursor:pointer;opacity:.96}
+  .ib:active{background:var(--panel2)}
+  .ib.on{border-color:var(--accent);color:var(--accent)}
+  /* 連続再生ポップアップ */
+  #player{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.82);display:flex;align-items:center;justify-content:center;
+    padding:calc(12px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left))}
+  #player[hidden]{display:none}
+  .pwin{position:relative;width:min(100%,1200px);height:100%;background:#000;border:1px solid #444a5c;border-radius:14px;
+    overflow:hidden;box-shadow:0 12px 40px #000a}
+  .stage{position:absolute;inset:0}
+  .stage img,.stage video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;visibility:hidden}
+  #pCap{position:absolute;left:14px;right:64px;bottom:10px;font-size:12px;color:#aab2c5;text-shadow:0 1px 3px #000;
+    pointer-events:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #pClose{position:absolute;top:8px;right:8px;z-index:2;width:44px;height:44px;padding:0;border-radius:22px;background:#000a;font-size:18px}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+
+<div id="ui">
+  <div class="row">
+    <button id="fileBtn" aria-label="ファイル操作">📁</button>
+    <button id="modeBtn"></button>
+    <button id="arrBtn" aria-label="並べ替え" title="並べ替え">🔀</button>
+  </div>
+  <div class="row" id="connRow" hidden>
+    <button id="cFwd">選択順 →</button>
+    <button id="cRev">← 逆順</button>
+    <button id="cBoth">↔ 両方</button>
+    <button id="cDel">接続解除</button>
+  </div>
+</div>
+
+<div id="ui2">
+  <button id="playBtn" class="ib" aria-label="連続再生" title="連続再生">▶</button>
+  <a id="helpBtn" class="ib" href="about.html" target="_blank" rel="noopener" aria-label="ヘルプ" title="ヘルプ">?</a>
+  <button id="fsBtn" class="ib" aria-label="フルスクリーン" title="フルスクリーン">⛶</button>
+</div>
+
+<div id="player" hidden>
+  <div class="pwin">
+    <div class="stage">
+      <img id="pImg" alt="">
+      <video id="pVid" playsinline preload="auto"></video>
+    </div>
+    <div id="pCap"></div>
+    <button id="pClose" aria-label="閉じる">✕</button>
+  </div>
+</div>
+
+<div id="popup" hidden></div>
+
+<div id="dlg" hidden>
+  <div class="card">
+    <div>ノード名を入力、または画像・動画を選択</div>
+    <input id="nameIn" type="text" placeholder="ノード名" autocomplete="off">
+    <div class="btns">
+      <button id="dlgImg">🖼 画像から作成</button>
+      <button id="dlgVid">🎞 動画から作成</button>
+    </div>
+    <div class="btns">
+      <button id="dlgCancel">キャンセル</button>
+      <button id="dlgOk">追加</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<input id="imgPick" type="file" accept="image/*" hidden>
+<input id="vidPick" type="file" accept="video/*" hidden>
+<input id="jsonPick" type="file" accept=".json,application/json" hidden>
+<input id="mediaPick" type="file" accept="image/*,video/*" multiple hidden>
+
+<script>
+(() => {
+'use strict';
+
+/* ---------- 基本 ---------- */
+const $ = s => document.querySelector(s);
+const cv = $('#cv'), ctx = cv.getContext('2d');
+const STORE = 'keyframe-map.v1';
+let W = 0, H = 0, dpr = 1;
+const view = { x: 0, y: 0, s: 1 };          // screen = world * s + (x, y)
+let nodes = [], arrows = [];                 // 矢印の from/to が null ＝ ノードにつながっていない「未リンクの矢印」（位置は ux, uy）
+const sel = { nodes: [], arrow: null };      // nodes: 選択順
+let mode = 'pencil';
+const media = new Map();                     // ファイル名 -> objectURL
+const imgs = new Map(), vids = new Map();    // ファイル名 -> {el, ok}
+const uid = () => Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const nodeById = id => nodes.find(n => n.id === id);
+const arrowById = id => arrows.find(a => a.id === id);
+const isFree = a => a.from == null || a.to == null;
+const toWorld = (px, py) => ({ x: (px - view.x) / view.s, y: (py - view.y) / view.s });
+
+const MODES = {
+  pencil: '✏️ ペンシル',
+  connect: '🔗 接続編集',
+  layout: '📐 レイアウト',
+  hand: '✋ ハンド'
+};
+const NODE_W = 120, NODE_H = 44;
+
+let toastT = 0;
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), Math.max(2600, msg.length * 110));
+}
+
+/* ---------- メディア ---------- */
+/* ファイル内容のハッシュ（リネームされても再リンクできるようにJSONへ保存する） */
+const mediaHash = new Map();                 // ファイル名 -> ハッシュ
+const hashJobs = new Map();                  // ファイル名 -> Promise<ハッシュ|null>
+const FULL_MAX = 32 * 1024 * 1024, CHUNK = 4 * 1024 * 1024;
+const toHex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+async function fileHash(file) {
+  if (!(window.crypto && crypto.subtle)) return null;
+  if (file.size <= FULL_MAX) return 'sha256:' + toHex(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()));
+  // 大きいファイルは「サイズ＋先頭・中央・末尾の各4MB」から計算（全読み込みによるメモリ不足を避ける）
+  const bufs = [new TextEncoder().encode(file.size + ':')];
+  for (const o of [0, Math.floor((file.size - CHUNK) / 2), file.size - CHUNK]) {
+    bufs.push(new Uint8Array(await file.slice(o, o + CHUNK).arrayBuffer()));
+  }
+  const all = new Uint8Array(bufs.reduce((n, b) => n + b.length, 0));
+  let pos = 0; bufs.forEach(b => { all.set(b, pos); pos += b.length; });
+  return 'sha256q:' + toHex(await crypto.subtle.digest('SHA-256', all));
+}
+function registerFile(file) {
+  const old = media.get(file.name);
+  if (old) URL.revokeObjectURL(old);
+  media.set(file.name, URL.createObjectURL(file));
+  imgs.delete(file.name);
+  arrows.forEach(a => { if (a.video === file.name) a.rt = 'idle'; });
+  const v = vids.get(file.name);
+  if (v) { v.el.pause(); vids.delete(file.name); }
+  mediaHash.delete(file.name);
+  let job;
+  job = fileHash(file).then(h => { if (hashJobs.get(file.name) === job && h) mediaHash.set(file.name, h); return h; }, () => null);
+  hashJobs.set(file.name, job);
+  return file.name;
+}
+function findByHash(h) {                     // 読み込み済みメディアからハッシュ一致のファイル名を探す
+  if (!h) return null;
+  for (const [name, hh] of mediaHash) if (hh === h && media.has(name)) return name;
+  return null;
+}
+function relinkRefs() {                      // 戻り値：ハッシュ一致でファイル名を更新した件数
+  let renamed = 0;
+  const fix = (o, nameKey, hashKey) => {
+    const nm = o[nameKey]; if (!nm) return;
+    if (media.has(nm)) {                     // ファイル名が見つかった：ハッシュを現在の内容に合わせる
+      const h = mediaHash.get(nm);
+      if (h) o[hashKey] = h;
+      return;
+    }
+    const alt = findByHash(o[hashKey]);      // 見つからない：ハッシュが一致するファイルへ付け替える
+    if (alt) { o[nameKey] = alt; renamed++; }
+  };
+  nodes.forEach(n => fix(n, 'image', 'imageHash'));
+  arrows.forEach(a => fix(a, 'video', 'videoHash'));
+  return renamed;
+}
+function getImg(name) {
+  if (!media.has(name)) return null;
+  let e = imgs.get(name);
+  if (!e) {
+    e = { el: new Image(), ok: false };
+    e.el.onload = () => { e.ok = true; draw(); };
+    e.el.src = media.get(name);
+    imgs.set(name, e);
+  }
+  return e;
+}
+function getVid(name) {
+  if (!media.has(name)) return null;
+  let e = vids.get(name);
+  if (!e) {
+    const v = document.createElement('video');
+    v.playsInline = true; v.preload = 'auto';
+    e = { el: v, ok: false };
+    v.onloadeddata = () => { e.ok = true; try { v.currentTime = 0.01; } catch (_) {} draw(); };
+    v.onseeked = draw; v.onplay = draw;
+    v.onpause = () => {
+      if (v.ended) return;
+      arrows.forEach(a => { if (a.video === name && a.rt === 'play') a.rt = 'paused'; });
+      draw();
+    };
+    v.onended = () => {
+      arrows.forEach(a => { if (a.video === name && a.rt === 'play') a.rt = 'end'; });
+      draw();
+    };
+    v.src = media.get(name);
+    vids.set(name, e);
+  }
+  return e;
+}
+const anyPlaying = () => [...vids.values()].some(e => !e.el.paused && !e.el.ended);
+
+/* 登録済みのファイル名を、ノードの画像／矢印の動画として設定する */
+function applyNodeImage(n, name, done) {
+  const probe = new Image();
+  probe.onload = () => {
+    n.image = name; n.imageHash = null;
+    hashJobs.get(name).then(h => { if (n.image === name) { n.imageHash = h; save(); } });
+    n.pw = n.pw || 160;
+    n.ph = n.pw * probe.naturalHeight / probe.naturalWidth;
+    save(); draw(); if (done) done(n);
+  };
+  probe.onerror = () => toast('画像を読み込めませんでした');
+  probe.src = media.get(name);
+}
+function applyArrowVideo(a, name, fail, done) {
+  const v = document.createElement('video');
+  v.preload = 'metadata';
+  v.onloadedmetadata = () => {
+    a.video = name; a.videoHash = null;
+    hashJobs.get(name).then(h => { if (a.video === name) { a.videoHash = h; save(); } });
+    a.rt = 'idle';
+    a.vw = a.vw || 200;
+    a.vh = a.vw * v.videoHeight / v.videoWidth;
+    save(); draw();
+    if (done) done(a);
+  };
+  v.onerror = () => { toast('動画を読み込めませんでした'); if (fail) fail(); };
+  v.src = media.get(name);
+}
+function setNodeImage(n, file, done) { applyNodeImage(n, registerFile(file), done); }
+// 未リンクの矢印に動画が設定されたら、先頭・最終フレームのノードを自動生成して接続する
+function setArrowVideo(a, file) { applyArrowVideo(a, registerFile(file), null, isFree(a) ? autoFrames : null); }
+
+/* ---------- 先頭・最終フレームの自動生成 ---------- */
+const generated = new Set();                 // 自動生成した静止画のファイル名
+const uniqueName = n => {
+  if (!media.has(n)) return n;
+  const m = n.replace(/\.[^.]+$/, ''), e = n.slice(m.length);
+  let i = 2; while (media.has(m + '_' + i + e)) i++;
+  return m + '_' + i + e;
+};
+function seekTo(v, t) {
+  return new Promise((res, rej) => {
+    if (Math.abs(v.currentTime - t) < 0.001 && v.readyState >= 2) return res();
+    const to = setTimeout(() => rej(new Error('seek')), 8000);
+    v.onseeked = () => { clearTimeout(to); res(); };
+    v.onerror = () => { clearTimeout(to); rej(new Error('seek')); };
+    v.currentTime = t;
+  });
+}
+async function extractFrames(name) {         // 動画の先頭・最終フレームをPNGにする
+  const v = document.createElement('video');
+  v.muted = true; v.playsInline = true; v.preload = 'auto';
+  v.src = media.get(name);
+  try {
+    await new Promise((res, rej) => {
+      const to = setTimeout(() => rej(new Error('load')), 10000);
+      v.onloadeddata = () => { clearTimeout(to); res(); };
+      v.onerror = () => { clearTimeout(to); rej(new Error('load')); };
+    });
+    const dur = v.duration, w = v.videoWidth, h = v.videoHeight;
+    if (!w || !h || !isFinite(dur) || dur <= 0) throw new Error('meta');
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const cx = c.getContext('2d');
+    const grab = async t => {
+      await seekTo(v, t);
+      cx.drawImage(v, 0, 0, w, h);
+      return new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('blob')), 'image/png'));
+    };
+    const first = await grab(0), last = await grab(dur);
+    return { first, last, w, h };
+  } finally { v.removeAttribute('src'); v.load(); }
+}
+async function autoFrames(a) {               // 先頭フレームノード → 動画矢印 → 最終フレームノード
+  if (!a || a.framing || !a.video || !isFree(a) || !media.has(a.video)) return false;
+  const name = a.video;
+  a.framing = true;
+  try {
+    const fr = await extractFrames(name);
+    if (!arrowById(a.id) || a.video !== name || !isFree(a)) return false;   // 待つ間に変更・削除された
+    const base = name.replace(/\.[^.]+$/, '');
+    const mk = (blob, suffix, label, x) => {
+      const fn = registerFile(new File([blob], uniqueName(base + suffix + '.png'), { type: 'image/png' }));
+      generated.add(fn);
+      const n = { id: uid(), name: base + ' ' + label, x, y: a.uy, image: fn, imageHash: null, pw: 160, ph: 160 * fr.h / fr.w };
+      hashJobs.get(fn).then(h => { if (n.image === fn) { n.imageHash = h; save(); } });
+      nodes.push(n); return n;
+    };
+    const half = 80 + (a.vw + 60) / 2;       // 動画プレビューがノードに重ならない間隔
+    const f = mk(fr.first, '_first', '先頭', a.ux - half), l = mk(fr.last, '_last', '最終', a.ux + half);
+    a.from = f.id; a.to = l.id; a.ux = a.uy = null; a.rt = 'idle';
+    save(); updateConnUI(); draw();
+    return true;
+  } catch (_) {
+    toast('先頭・最終フレームを生成できませんでした（未リンクの矢印のまま残します）');
+    return false;
+  } finally { a.framing = false; }
+}
+async function saveGenerated() {             // 生成した静止画を保存（再リンク時に一緒に選べば元どおりリンクされる）
+  const names = [...generated].filter(nm => media.has(nm) && nodes.some(n => n.image === nm));
+  if (!names.length) return toast('保存する生成画像がありません');
+  for (const nm of names) {
+    const blob = await (await fetch(media.get(nm))).blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = nm;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    await new Promise(r => setTimeout(r, 300));
+  }
+  toast(`${names.length} 件の静止画を保存しました`);
+}
+
+/* ---------- 幾何 ---------- */
+const box = n => n.image ? { w: n.pw, h: n.ph } : { w: NODE_W, h: NODE_H };
+function exitPoint(c, w, h, st, d) {      // 矩形(中心c)の内側stから方向dへ出る点
+  const rx = st.x - c.x, ry = st.y - c.y;
+  const tx = d.x > 0 ? (w / 2 - rx) / d.x : d.x < 0 ? (-w / 2 - rx) / d.x : Infinity;
+  const ty = d.y > 0 ? (h / 2 - ry) / d.y : d.y < 0 ? (-h / 2 - ry) / d.y : Infinity;
+  const k = Math.max(0, Math.min(tx, ty));
+  return { x: st.x + d.x * k, y: st.y + d.y * k };
+}
+const OFF = 18;                              // 両方向接続時の平行オフセット
+function geom(a) {
+  if (isFree(a)) {                           // 未リンクの矢印：線はなく、プレビューだけを (ux, uy) に置く
+    const c = { x: a.ux || 0, y: a.uy || 0 };
+    return { free: true, p1: null, p2: null, mid: c, vc: { x: c.x, y: c.y } };
+  }
+  const f = nodeById(a.from), t = nodeById(a.to);
+  if (!f || !t) return null;
+  const fb = box(f), tb = box(t);
+  const dx = t.x - f.x, dy = t.y - f.y, len = Math.hypot(dx, dy);
+  const both = arrows.some(x => x.from === a.to && x.to === a.from);
+  const nx = len ? -dy / len : 0, ny = len ? dx / len : 0;
+  const ox = both ? nx * OFF : 0, oy = both ? ny * OFF : 0;
+  let p1, p2;
+  if (!len) { p1 = { x: f.x, y: f.y }; p2 = p1; }
+  else {
+    p1 = exitPoint(f, fb.w, fb.h, { x: f.x + ox, y: f.y + oy }, { x: dx, y: dy });
+    p2 = exitPoint(t, tb.w, tb.h, { x: t.x + ox, y: t.y + oy }, { x: -dx, y: -dy });
+  }
+  const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+  let vc = { x: mid.x, y: mid.y };
+  if (both && a.video) {                     // 2本の動画プレビューが重ならないよう外側へずらす
+    const e = (Math.abs(nx) * a.vw + Math.abs(ny) * a.vh) / 2 + 4;
+    vc = { x: mid.x + nx * e, y: mid.y + ny * e };
+  }
+  return { p1, p2, mid, vc };
+}
+function distSeg(px, py, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+  let t = l2 ? ((px - a.x) * dx + (py - a.y) * dy) / l2 : 0;
+  t = clamp(t, 0, 1);
+  return Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy));
+}
+function hitNode(n, x, y) {
+  const b = box(n);
+  return Math.abs(x - n.x) <= b.w / 2 && y >= n.y - b.h / 2 && y <= n.y + b.h / 2 + (n.image ? 22 : 0);
+}
+function hitTest(x, y) {
+  for (let i = nodes.length - 1; i >= 0; i--) if (hitNode(nodes[i], x, y)) return { type: 'node', id: nodes[i].id };
+  for (let i = arrows.length - 1; i >= 0; i--) {
+    const a = arrows[i], g = geom(a);
+    if (!g) continue;
+    if (a.video && Math.abs(x - g.vc.x) <= a.vw / 2 && Math.abs(y - g.vc.y) <= a.vh / 2) return { type: 'arrow', id: a.id };
+    if (!g.free && distSeg(x, y, g.p1, g.p2) <= 14 / view.s) return { type: 'arrow', id: a.id };
+  }
+  return null;
+}
+
+/* ---------- 描画 ---------- */
+let raf = 0;
+function draw() { if (!raf) raf = requestAnimationFrame(render); }
+
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function fit(t, maxW) {
+  if (ctx.measureText(t).width <= maxW) return t;
+  while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+  return t + '…';
+}
+
+function render() {
+  raf = 0;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#23262f';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.translate(view.x, view.y);
+  ctx.scale(view.s, view.s);
+
+  // グリッド
+  let step = 100;
+  while (step * view.s < 14) step *= 5;
+  const x0 = Math.floor(-view.x / view.s / step) * step, x1 = (W - view.x) / view.s;
+  const y0 = Math.floor(-view.y / view.s / step) * step, y1 = (H - view.y) / view.s;
+  ctx.strokeStyle = 'rgba(255,255,255,.06)';
+  ctx.lineWidth = 1 / view.s;
+  ctx.beginPath();
+  for (let x = x0; x <= x1; x += step) { ctx.moveTo(x, y0); ctx.lineTo(x, y1); }
+  for (let y = y0; y <= y1; y += step) { ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
+  ctx.stroke();
+
+  arrows.forEach(drawArrow);
+  nodes.forEach(drawNode);
+  arrows.forEach(drawVideo);
+  ctx.restore();
+
+  if (!nodes.length && !arrows.length) {
+    ctx.fillStyle = 'rgba(255,255,255,.4)';
+    ctx.font = '14px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('ペンシルモードでキャンバスをタップしてノードを追加', W / 2, H / 2);
+  }
+  if (anyPlaying()) draw();
+}
+
+function drawArrow(a) {
+  const g = geom(a); if (!g || g.free) return;
+  const s = sel.arrow === a.id;
+  const col = s ? '#ffb84d' : '#9fb4d6';
+  const ang = Math.atan2(g.p2.y - g.p1.y, g.p2.x - g.p1.x), hl = 16;
+  ctx.save();
+  ctx.strokeStyle = col; ctx.fillStyle = col;
+  ctx.lineWidth = s ? 4 : 2.5; ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(g.p1.x, g.p1.y);
+  ctx.lineTo(g.p2.x - Math.cos(ang) * hl * .6, g.p2.y - Math.sin(ang) * hl * .6);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(g.p2.x, g.p2.y);
+  ctx.lineTo(g.p2.x - hl * Math.cos(ang - .4), g.p2.y - hl * Math.sin(ang - .4));
+  ctx.lineTo(g.p2.x - hl * Math.cos(ang + .4), g.p2.y - hl * Math.sin(ang + .4));
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+/* シークバー：左端＝開始ノードの静止画 / 中間＝動画 / 右端＝終了ノードの静止画 */
+const SNAP = 0.04;                           // 両端の静止画ゾーンの割合
+function sliderGeom(a, g) {
+  const x = g.vc.x - a.vw / 2, y = g.vc.y - a.vh / 2;
+  return { x0: x + 8, x1: x + a.vw - 8, y: y + a.vh + 14 };
+}
+function seekPos(a) {
+  const rt = a.rt || 'idle';
+  if (rt === 'idle') return 0;
+  if (rt === 'end') return 1;
+  const ve = getVid(a.video), v = ve && ve.el;
+  if (!v || !isFinite(v.duration) || v.duration <= 0) return SNAP;
+  return SNAP + clamp(v.currentTime / v.duration, 0, 1) * (1 - 2 * SNAP);
+}
+function setSeek(a, p) {
+  p = clamp(p, 0, 1);
+  const ve = getVid(a.video), v = ve && ve.el;
+  const dur = v && isFinite(v.duration) && v.duration > 0 ? v.duration : 0;
+  if (v) v.pause();
+  if (p <= SNAP || (!dur && p < 0.5)) {
+    a.rt = 'idle';
+    if (v) { try { v.currentTime = 0; } catch (_) {} }
+  } else if (p >= 1 - SNAP || !dur) {
+    a.rt = 'end';
+    if (dur) { try { v.currentTime = dur; } catch (_) {} }
+  } else {
+    a.rt = 'paused';
+    try { v.currentTime = (p - SNAP) / (1 - 2 * SNAP) * dur; } catch (_) {}
+  }
+  draw();
+}
+function seekFromX(a, cx) {
+  const g = geom(a); if (!g) return;
+  const sg = sliderGeom(a, g), wx = (cx - view.x) / view.s;
+  setSeek(a, (wx - sg.x0) / (sg.x1 - sg.x0));
+}
+function hitSlider(wx, wy) {
+  const pad = Math.max(12, 16 / view.s);
+  for (let i = arrows.length - 1; i >= 0; i--) {
+    const a = arrows[i]; if (!a.video) continue;
+    const g = geom(a); if (!g) continue;
+    const sg = sliderGeom(a, g);
+    if (wx >= sg.x0 - pad && wx <= sg.x1 + pad && Math.abs(wy - sg.y) <= pad) return a;
+  }
+  return null;
+}
+function startSlider(gs, a, cx) {
+  selectArrow(a.id); updateConnUI();
+  gs.slider = { a, was: a.rt === 'play' };
+  gs.moved = true; gs.drag = null;
+  seekFromX(a, cx);
+}
+function endSlider(gs) {
+  const sl = gs.slider; if (!sl) return;
+  if (sl.was && sl.a.rt === 'paused') togglePlay(sl.a);   // 再生中だった場合は中間位置から再開
+}
+function drawSlider(a, g, selected) {
+  const sg = sliderGeom(a, g), p = seekPos(a);
+  const L = sg.x1 - sg.x0, px = sg.x0 + L * p;
+  const zl = sg.x0 + L * SNAP, zr = sg.x1 - L * SNAP;
+  ctx.save(); ctx.lineCap = 'round'; ctx.lineWidth = 4;
+  ctx.strokeStyle = 'rgba(255,255,255,.22)';
+  ctx.beginPath(); ctx.moveTo(sg.x0, sg.y); ctx.lineTo(sg.x1, sg.y); ctx.stroke();
+  ctx.strokeStyle = '#4da3ff';                 // 静止画ゾーン（両端）
+  ctx.beginPath(); ctx.moveTo(sg.x0, sg.y); ctx.lineTo(zl, sg.y); ctx.moveTo(zr, sg.y); ctx.lineTo(sg.x1, sg.y); ctx.stroke();
+  if (p > SNAP) {                              // 動画区間の進捗
+    ctx.strokeStyle = selected ? '#ffb84d' : '#9fb4d6';
+    ctx.beginPath(); ctx.moveTo(zl, sg.y); ctx.lineTo(Math.min(px, zr), sg.y); ctx.stroke();
+  }
+  ctx.fillStyle = '#fff'; ctx.strokeStyle = selected ? '#ffb84d' : '#4da3ff'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(px, sg.y, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+
+function drawCover(el, sw, sh, x, y, w, h) {
+  const r = Math.max(w / sw, h / sh), dw = sw * r, dh = sh * r;
+  ctx.save(); rr(x, y, w, h, 8); ctx.clip();
+  ctx.drawImage(el, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+  ctx.restore();
+}
+function nodeImgEl(id) {
+  const n = nodeById(id);
+  if (!n || !n.image) return null;
+  const im = getImg(n.image);
+  return im && im.ok ? im.el : null;
+}
+
+function drawVideo(a) {
+  if (!a.video) return;
+  const g = geom(a); if (!g) return;
+  const x = g.vc.x - a.vw / 2, y = g.vc.y - a.vh / 2, w = a.vw, h = a.vh;
+  const s = sel.arrow === a.id;
+  const ve = getVid(a.video);
+  const rt = a.rt || 'idle';
+  ctx.save();
+  ctx.fillStyle = '#10121a';
+  rr(x, y, w, h, 8); ctx.fill();
+  let shown = false;
+  // 再生前＝開始ノードの静止画、再生後＝終了ノードの静止画、再生中・一時停止中＝動画フレーム
+  if (rt === 'idle' || rt === 'end') {
+    const el = nodeImgEl(rt === 'idle' ? a.from : a.to);
+    if (el) { drawCover(el, el.naturalWidth, el.naturalHeight, x, y, w, h); shown = true; }
+  }
+  if (!shown && ve && ve.ok && ve.el.readyState >= 2) {
+    drawCover(ve.el, ve.el.videoWidth, ve.el.videoHeight, x, y, w, h); shown = true;
+  }
+  if (!shown) {
+    ctx.fillStyle = '#8b93a8'; ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(media.has(a.video) ? '読み込み中…' : '未リンク', g.vc.x, g.vc.y + Math.min(30, h / 3));
+  }
+  ctx.lineWidth = s ? 3 : 1.5;
+  ctx.strokeStyle = s ? '#ffb84d' : '#9fb4d6';
+  if (!media.has(a.video)) ctx.setLineDash([6, 4]);
+  rr(x, y, w, h, 8); ctx.stroke(); ctx.setLineDash([]);
+  const playing = rt === 'play' && ve && !ve.el.paused && !ve.el.ended;
+  if (!playing) {
+    const r = Math.min(24, w / 4, h / 3);
+    ctx.fillStyle = 'rgba(0,0,0,.55)';
+    ctx.beginPath(); ctx.arc(g.vc.x, g.vc.y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.moveTo(g.vc.x - r * .3, g.vc.y - r * .5);
+    ctx.lineTo(g.vc.x + r * .55, g.vc.y);
+    ctx.lineTo(g.vc.x - r * .3, g.vc.y + r * .5);
+    ctx.closePath(); ctx.fill();
+  }
+  drawSlider(a, g, s);
+  // 動画ファイル名
+  ctx.fillStyle = '#e8ecf4'; ctx.font = '12px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.fillText(fit(a.video, Math.max(w, 120)), g.vc.x, y + h + 28);
+  if (g.free) {                              // ノードにつながっていない矢印の目印
+    ctx.fillStyle = '#ffb84d'; ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    ctx.fillText('未接続', x, y - 4);
+  }
+  ctx.restore();
+}
+
+function drawNode(n) {
+  const b = box(n), x = n.x - b.w / 2, y = n.y - b.h / 2;
+  const idx = sel.nodes.indexOf(n.id), isSel = idx >= 0;
+  ctx.save();
+  if (n.image) {
+    const im = getImg(n.image);
+    if (im && im.ok) {
+      ctx.drawImage(im.el, x, y, b.w, b.h);
+      ctx.strokeStyle = '#9fb4d6'; ctx.lineWidth = 1.5; ctx.strokeRect(x, y, b.w, b.h);
+    } else {
+      ctx.fillStyle = '#2f3340'; ctx.fillRect(x, y, b.w, b.h);
+      ctx.strokeStyle = '#8b93a8'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
+      ctx.strokeRect(x, y, b.w, b.h); ctx.setLineDash([]);
+      ctx.fillStyle = '#8b93a8'; ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(fit(n.image, b.w - 12), n.x, n.y);
+    }
+    ctx.fillStyle = '#e8ecf4'; ctx.font = '13px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(fit(n.name, Math.max(b.w, 100)), n.x, y + b.h + 4);
+  } else {
+    ctx.fillStyle = '#2f4a7a'; rr(x, y, b.w, b.h, 10); ctx.fill();
+    ctx.strokeStyle = '#6f93d1'; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.font = '14px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(fit(n.name, b.w - 14), n.x, n.y);
+  }
+  if (isSel) {
+    ctx.strokeStyle = '#ffb84d'; ctx.lineWidth = Math.max(2.5, 3 / view.s);
+    rr(x - 4, y - 4, b.w + 8, b.h + 8, 8); ctx.stroke();
+    if (mode === 'connect') {
+      const r = 11;
+      ctx.fillStyle = '#ffb84d';
+      ctx.beginPath(); ctx.arc(x - 4, y - 4, r, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#1b1d24'; ctx.font = 'bold 13px sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(idx + 1), x - 4, y - 3);
+    }
+  }
+  ctx.restore();
+}
+
+/* ---------- 選択 ---------- */
+/* 接続編集モードでは「2ノード」「2ノード＋未リンクの矢印」「リンク済みの矢印1本」を選べる */
+function selectNode(id) {
+  if (mode === 'connect') {
+    const i = sel.nodes.indexOf(id);
+    if (i >= 0) sel.nodes.splice(i, 1);
+    else { sel.nodes.push(id); if (sel.nodes.length > 2) sel.nodes.shift(); }
+    const a = sel.arrow && arrowById(sel.arrow);
+    if (a && !isFree(a)) sel.arrow = null;   // リンク済みの矢印とノードは同時に選べない
+  } else { sel.nodes = [id]; sel.arrow = null; }
+}
+function selectArrow(id) {
+  const a = arrowById(id);
+  if (mode === 'connect' && a && isFree(a)) { sel.arrow = id; return; }   // 未リンクの矢印はノード選択を保つ
+  sel.nodes = []; sel.arrow = id;
+}
+function clearSel() { sel.nodes = []; sel.arrow = null; }
+
+/* ---------- 接続 ---------- */
+function pairArrows() {
+  if (sel.nodes.length !== 2) return { ab: null, ba: null };
+  const [a, b] = sel.nodes;
+  return {
+    ab: arrows.find(x => x.from === a && x.to === b) || null,
+    ba: arrows.find(x => x.from === b && x.to === a) || null
+  };
+}
+/* kind: nodes＝2ノード / free＝2ノード＋未リンクの矢印 / linked＝リンク済みの矢印 / none */
+function connState() {
+  const a = sel.arrow ? arrowById(sel.arrow) : null;
+  if (a && !isFree(a)) return { kind: 'linked', a };
+  if (sel.nodes.length === 2) return { kind: a ? 'free' : 'nodes', a };
+  return { kind: 'none', a };
+}
+const reverseOf = x => arrows.find(y => y !== x && y.from === x.to && y.to === x.from) || null;
+function updateConnUI() {
+  const st = connState();
+  const bt = { fwd: $('#cFwd'), rev: $('#cRev'), both: $('#cBoth'), del: $('#cDel') };
+  Object.values(bt).forEach(b => { b.disabled = true; b.classList.remove('on'); });
+  if (st.kind === 'linked') {
+    const ba = reverseOf(st.a);              // 逆向きの矢印がすでにあれば「逆順」「両方」は不要
+    bt.rev.disabled = !!ba; bt.both.disabled = !!ba; bt.del.disabled = false;
+    bt.both.classList.toggle('on', !!ba);
+  } else if (st.kind === 'nodes' || st.kind === 'free') {
+    const { ab, ba } = pairArrows();
+    if (st.kind === 'nodes') { bt.fwd.disabled = bt.rev.disabled = bt.both.disabled = false; }
+    else { bt.fwd.disabled = !!ab; bt.rev.disabled = !!ba; bt.both.disabled = !!(ab && ba); }
+    bt.del.disabled = !(ab || ba);
+    bt.fwd.classList.toggle('on', !!ab && !ba);
+    bt.rev.classList.toggle('on', !!ba && !ab);
+    bt.both.classList.toggle('on', !!ab && !!ba);
+  }
+}
+const newArrow = (f, t) => ({ id: uid(), from: f, to: t, ux: null, uy: null, video: null, videoHash: null, vw: null, vh: null });
+function connect(dir) {
+  const st = connState();
+  if (st.kind === 'linked') return connectLinked(dir, st.a);
+  if (st.kind === 'free') return attachFree(dir, st.a);
+  if (sel.nodes.length !== 2) return;
+  const [a, b] = sel.nodes;
+  const { ab, ba } = pairArrows();
+  const mk = (f, t) => arrows.push(newArrow(f, t));
+  const rm = x => { arrows = arrows.filter(y => y !== x); if (sel.arrow === x.id) sel.arrow = null; };
+  if (dir === 'fwd') {
+    if (ab) { if (ba) rm(ba); }
+    else if (ba) { ba.from = a; ba.to = b; } else mk(a, b);
+  } else if (dir === 'rev') {
+    if (ba) { if (ab) rm(ab); }
+    else if (ab) { ab.from = b; ab.to = a; } else mk(b, a);
+  } else {
+    if (!ab) mk(a, b);
+    if (!ba) mk(b, a);
+  }
+  save(); updateConnUI(); draw();
+}
+/* 未リンクの矢印を、選択した2ノードの間につなぐ */
+function attachFree(dir, u) {
+  const [a, b] = sel.nodes;
+  const { ab, ba } = pairArrows();
+  if (dir === 'fwd') { if (ab) return; u.from = a; u.to = b; }
+  else if (dir === 'rev') { if (ba) return; u.from = b; u.to = a; }
+  else if (!ab) { u.from = a; u.to = b; if (!ba) arrows.push(newArrow(b, a)); }   // 両方：残りの向きは動画なしの矢印を追加
+  else if (!ba) { u.from = b; u.to = a; }
+  else return;
+  u.rt = 'idle'; u.ux = u.uy = null;
+  sel.nodes = []; sel.arrow = u.id;          // つないだ矢印を選択したままにする
+  save(); updateConnUI(); draw();
+  toast('矢印をノードにつなぎました');
+}
+/* リンク済みの矢印の向きを逆にする／逆向きの矢印を追加する */
+function connectLinked(dir, x) {
+  if (reverseOf(x)) return;
+  if (dir === 'rev') { const f = x.from; x.from = x.to; x.to = f; x.rt = 'idle'; }
+  else if (dir === 'both') arrows.push(newArrow(x.to, x.from));
+  else return;
+  save(); updateConnUI(); draw();
+}
+function disconnect() {
+  const st = connState();
+  if (st.kind === 'linked') {                // 接続を解除して未リンクの矢印に変換
+    const x = st.a, g = geom(x);
+    if (!x.video) {                          // 動画のない矢印は置き場がないので削除
+      arrows = arrows.filter(y => y !== x); clearSel();
+      toast('動画のない矢印は削除しました');
+    } else {
+      x.ux = g.vc.x; x.uy = g.vc.y; x.from = null; x.to = null;
+      toast('未リンクの矢印にしました');
+    }
+    save(); updateConnUI(); draw(); return;
+  }
+  const { ab, ba } = pairArrows();
+  if (!ab && !ba) return;
+  arrows = arrows.filter(x => x !== ab && x !== ba);
+  if (sel.arrow && !arrowById(sel.arrow)) sel.arrow = null;
+  save(); updateConnUI(); draw();
+}
+$('#cFwd').onclick = () => connect('fwd');
+$('#cRev').onclick = () => connect('rev');
+$('#cBoth').onclick = () => connect('both');
+$('#cDel').onclick = disconnect;
+
+/* ---------- モード ---------- */
+function setMode(m) {
+  mode = m;
+  if (m !== 'connect') {
+    if (sel.arrow) sel.nodes = [];
+    else if (sel.nodes.length > 1) sel.nodes = [sel.nodes[sel.nodes.length - 1]];
+  }
+  $('#connRow').hidden = m !== 'connect';
+  $('#modeBtn').textContent = MODES[m];
+  updateConnUI(); draw(); toast(MODES[m]);
+}
+
+/* ---------- ポップアップ ---------- */
+const popup = $('#popup');
+function showPopup(x, y, items) {
+  popup.innerHTML = '';
+  items.forEach(it => {
+    const b = document.createElement('button');
+    b.textContent = it.label;
+    if (it.on) b.classList.add('on');
+    if (it.disabled) b.disabled = true;
+    b.onclick = () => { closePopups(); it.fn(); };
+    popup.appendChild(b);
+  });
+  popup.hidden = false;
+  popup.style.left = clamp(x, 6, W - popup.offsetWidth - 6) + 'px';
+  popup.style.top = clamp(y, 6, H - popup.offsetHeight - 6) + 'px';
+}
+function closePopups() { popup.hidden = true; }
+document.addEventListener('pointerdown', e => {
+  if (!e.target.closest('#popup') && !e.target.closest('#fileBtn') && !e.target.closest('#modeBtn') && !e.target.closest('#arrBtn')) closePopups();
+}, true);
+
+$('#modeBtn').onclick = e => {
+  const r = e.currentTarget.getBoundingClientRect();
+  showPopup(r.left, r.bottom + 6, Object.keys(MODES).map(k => ({ label: MODES[k], on: k === mode, fn: () => setMode(k) })));
+};
+$('#arrBtn').onclick = e => {
+  const r = e.currentTarget.getBoundingClientRect();
+  showPopup(r.left, r.bottom + 6, [
+    { label: '🔤 ノード名でソート', fn: () => arrange('name') },
+    { label: '🖼 画像の類似度でソート', fn: () => arrange('image') },
+    { label: '↩ 並べ替えを元に戻す', disabled: !undoSnap, fn: undoArrange }
+  ]);
+};
+$('#fileBtn').onclick = e => {
+  const r = e.currentTarget.getBoundingClientRect();
+  showPopup(r.left, r.bottom + 6, [
+    { label: '💾 保存（JSON）', fn: saveJSON },
+    { label: '📂 読み込み（JSON）', fn: () => $('#jsonPick').click() },
+    { label: '🔄 メディア再リンク（複数選択）', fn: () => $('#mediaPick').click() },
+    { label: '🖼 生成した静止画を保存', fn: saveGenerated },
+    { label: '🗑 新規作成', fn: () => { if (confirm('現在の内容を破棄して新規作成しますか？')) resetAll(); } }
+  ]);
+};
+
+/* ---------- 長押しメニュー ---------- */
+let pickCtx = null;
+function onLong(g) {
+  const hit = g.hit;
+  if (hit) {
+    if (hit.type === 'node' && !sel.nodes.includes(hit.id)) { sel.nodes = [hit.id]; sel.arrow = null; }
+    if (hit.type === 'arrow' && sel.arrow !== hit.id) selectArrow(hit.id);
+  }
+  let target = null;
+  if (hit && hit.type === 'node') target = { k: 'node', o: nodeById(hit.id) };          // 長押ししたものを優先
+  else if (hit && hit.type === 'arrow') target = { k: 'arrow', o: arrowById(hit.id) };
+  else if (sel.arrow) target = { k: 'arrow', o: arrowById(sel.arrow) };
+  else if (sel.nodes.length === 1) target = { k: 'node', o: nodeById(sel.nodes[0]) };
+  updateConnUI(); draw();
+  if (!target || !target.o) return;
+  if (navigator.vibrate) navigator.vibrate(15);
+  const o = target.o;
+  if (target.k === 'node') {
+    showPopup(g.sx, g.sy, [
+      { label: '🖼 ファイル名選択（画像）', fn: () => { pickCtx = { type: 'nodeImage', id: o.id }; $('#imgPick').click(); } },
+      { label: 'ファイル解除', disabled: !o.image, fn: () => { o.image = null; o.imageHash = null; save(); draw(); } },
+      { label: '✏️ 名前を変更', fn: () => { const t = prompt('ノード名', o.name); if (t !== null) { o.name = t.trim() || o.name; save(); draw(); } } },
+      { label: '🗑 ノードを削除', fn: () => { nodes = nodes.filter(n => n !== o); arrows = arrows.filter(a => a.from !== o.id && a.to !== o.id); clearSel(); updateConnUI(); save(); draw(); } }
+    ]);
+  } else {
+    showPopup(g.sx, g.sy, [
+      { label: '🎞 ファイル名選択（動画）', fn: () => { pickCtx = { type: 'arrowVideo', id: o.id }; $('#vidPick').click(); } },
+      { label: 'ファイル解除', disabled: !o.video, fn: () => {
+          const v = vids.get(o.video); if (v) v.el.pause();
+          if (isFree(o)) {                   // 未リンクの矢印は動画がないと表示できないので削除
+            arrows = arrows.filter(a => a !== o); clearSel(); updateConnUI();
+            toast('未リンクの矢印は削除しました');
+          } else { o.video = null; o.videoHash = null; o.rt = 'idle'; }
+          save(); draw();
+        } },
+      { label: '🗑 矢印を削除', fn: () => { arrows = arrows.filter(a => a !== o); clearSel(); updateConnUI(); save(); draw(); } }
+    ]);
+  }
+}
+
+$('#imgPick').onchange = e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f || !pickCtx) return;
+  const c = pickCtx; pickCtx = null;
+  if (c.type === 'nodeImage') { const n = nodeById(c.id); if (n) setNodeImage(n, f); }
+  else if (c.type === 'newNode') {
+    $('#dlg').hidden = true;
+    const n = { id: uid(), name: c.name || f.name, x: c.pos.x, y: c.pos.y, image: null, pw: null, ph: null };
+    nodes.push(n); selectNode(n.id); updateConnUI();
+    setNodeImage(n, f);
+  }
+};
+$('#vidPick').onchange = e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f || !pickCtx) return;
+  const c = pickCtx; pickCtx = null;
+  if (c.type === 'newArrow') {               // 未リンクの矢印として読み込み、先頭・最終フレームのノードを自動生成して接続
+    $('#dlg').hidden = true;
+    const a = { id: uid(), from: null, to: null, ux: c.pos.x, uy: c.pos.y, video: null, videoHash: null, vw: null, vh: null };
+    arrows.push(a);
+    applyArrowVideo(a, registerFile(f), () => { arrows = arrows.filter(x => x !== a); draw(); }, autoFrames);
+    return;
+  }
+  const a = arrowById(c.id); if (a) setArrowVideo(a, f);
+};
+
+/* ---------- ノード追加ダイアログ ---------- */
+let newPos = null;
+function openNewNode(pos) {
+  newPos = pos;
+  $('#nameIn').value = '';
+  $('#dlg').hidden = false;
+  setTimeout(() => $('#nameIn').focus(), 50);
+}
+function addNodeByName() {
+  const name = $('#nameIn').value.trim() || ('ノード' + (nodes.length + 1));
+  const n = { id: uid(), name, x: newPos.x, y: newPos.y, image: null, pw: null, ph: null };
+  nodes.push(n); selectNode(n.id);
+  $('#dlg').hidden = true; updateConnUI(); save(); draw();
+}
+$('#dlgOk').onclick = addNodeByName;
+$('#nameIn').addEventListener('keydown', e => { if (e.key === 'Enter') addNodeByName(); });
+$('#dlgCancel').onclick = () => { $('#dlg').hidden = true; };
+$('#dlgImg').onclick = () => {
+  pickCtx = { type: 'newNode', pos: newPos, name: $('#nameIn').value.trim() };
+  $('#imgPick').click();
+};
+$('#dlgVid').onclick = () => {               // タップした位置に、動画から未リンクの矢印を作成
+  pickCtx = { type: 'newArrow', pos: newPos };
+  $('#vidPick').click();
+};
+
+/* ---------- タップ ---------- */
+function togglePlay(a) {
+  const e = getVid(a.video); if (!e) return;
+  const v = e.el, rt = a.rt || 'idle';
+  if (rt === 'play') { v.pause(); return; }      // pauseイベントで 'paused' へ
+  if (rt === 'end' || rt === 'idle') { try { v.currentTime = 0; } catch (_) {} }
+  a.rt = 'play';
+  v.play().catch(() => {
+    v.muted = true;
+    v.play().catch(() => { a.rt = 'paused'; draw(); });
+  });
+  draw();
+}
+function onTap(g) {
+  const hit = g.hit;
+  if (hit && hit.type === 'node') selectNode(hit.id);
+  else if (hit && hit.type === 'arrow') {
+    const a = arrowById(hit.id);
+    selectArrow(a.id);
+    if (a.video) {
+      const gm = geom(a);
+      if (gm && Math.hypot(g.w.x - gm.vc.x, g.w.y - gm.vc.y) <= Math.max(Math.min(28, a.vw / 3), 20 / view.s)) togglePlay(a);
+    }
+  } else {
+    clearSel();
+    if (mode === 'pencil') openNewNode(g.w);
+  }
+  updateConnUI(); draw();
+}
+
+/* ---------- ポインタ操作 ---------- */
+const ptrs = new Map();
+let g = null;
+
+cv.addEventListener('pointerdown', e => {
+  try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (ptrs.size === 1) {
+    const w = toWorld(e.clientX, e.clientY), hit = hitTest(w.x, w.y);
+    g = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y, w, hit, moved: false, long: false, pinched: false, drag: null };
+    if (mode === 'layout' && hit) {
+      if (hit.type === 'node' && sel.nodes.length === 1 && sel.nodes[0] === hit.id) {
+        g.drag = nodeById(hit.id); g.kx = 'x'; g.ky = 'y';
+      } else if (hit.type === 'arrow' && sel.arrow === hit.id && isFree(arrowById(hit.id))) {
+        g.drag = arrowById(hit.id); g.kx = 'ux'; g.ky = 'uy';     // 未リンクの矢印はスワイプで移動できる
+      }
+      if (g.drag) { g.ox = g.drag[g.kx]; g.oy = g.drag[g.ky]; }
+    }
+    const cur = g;
+    const sa = hitSlider(w.x, w.y);
+    if (sa) startSlider(g, sa, e.clientX);
+    else g.timer = setTimeout(() => { if (g === cur && !cur.moved && !cur.pinched) { cur.long = true; onLong(cur); } }, 550);
+  } else if (ptrs.size === 2 && g) startPinch();
+});
+
+function startPinch() {
+  clearTimeout(g.timer);
+  if (g.slider) { endSlider(g); g.slider = null; }
+  g.pinched = true; g.drag = null;
+  const [p, q] = [...ptrs.values()];
+  g.d0 = Math.hypot(p.x - q.x, p.y - q.y) || 1;
+  const c = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+  g.v0 = { ...view };
+  g.wc = { x: (c.x - view.x) / view.s, y: (c.y - view.y) / view.s };
+  g.target = null;
+  if (mode === 'layout') {
+    if (sel.nodes.length === 1) {
+      const n = nodeById(sel.nodes[0]);
+      if (n && n.image) g.target = { k: 'node', o: n, w0: n.pw, h0: n.ph };
+    } else if (sel.arrow) {
+      const a = arrowById(sel.arrow);
+      if (a && a.video) g.target = { k: 'arrow', o: a, w0: a.vw, h0: a.vh };
+    }
+  }
+}
+
+cv.addEventListener('pointermove', e => {
+  if (!ptrs.has(e.pointerId)) return;
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!g) return;
+  if (g.pinched) {
+    if (ptrs.size < 2) return;
+    const [p, q] = [...ptrs.values()];
+    const r = (Math.hypot(p.x - q.x, p.y - q.y) || 1) / g.d0;
+    const c = { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 };
+    if (g.target) {
+      const t = g.target, nw = clamp(t.w0 * r, 40, 1600), k = nw / t.w0;
+      if (t.k === 'node') { t.o.pw = nw; t.o.ph = t.h0 * k; }
+      else { t.o.vw = nw; t.o.vh = t.h0 * k; }
+    } else {
+      const s = clamp(g.v0.s * r, 0.15, 5);
+      view.s = s; view.x = c.x - g.wc.x * s; view.y = c.y - g.wc.y * s;
+    }
+    draw(); return;
+  }
+  if (g.slider) { seekFromX(g.slider.a, e.clientX); return; }
+  const dx = e.clientX - g.sx, dy = e.clientY - g.sy;
+  if (!g.moved && Math.hypot(dx, dy) > 8) { g.moved = true; clearTimeout(g.timer); }
+  if (!g.moved) return;
+  if (g.drag) { g.drag[g.kx] = g.ox + dx / view.s; g.drag[g.ky] = g.oy + dy / view.s; }
+  else { view.x = g.vx + dx; view.y = g.vy + dy; }
+  draw();
+});
+
+function pointerEnd(e) {
+  if (!ptrs.has(e.pointerId)) return;
+  ptrs.delete(e.pointerId);
+  if (!g || ptrs.size > 0) return;
+  clearTimeout(g.timer);
+  const gg = g; g = null;
+  if (gg.slider) { endSlider(gg); return; }
+  if (e.type === 'pointerup' && !gg.moved && !gg.long && !gg.pinched) onTap(gg);
+  else if (gg.pinched || gg.moved) save();
+}
+cv.addEventListener('pointerup', pointerEnd);
+cv.addEventListener('pointercancel', pointerEnd);
+cv.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('gesturestart', e => e.preventDefault());
+
+// PC: ホイールでズーム
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  const w = toWorld(e.clientX, e.clientY);
+  const s = clamp(view.s * Math.exp(-e.deltaY * 0.0015), 0.15, 5);
+  view.s = s; view.x = e.clientX - w.x * s; view.y = e.clientY - w.y * s;
+  draw();
+}, { passive: false });
+
+/* ---------- JSON保存・読み込み ---------- */
+function serialize() {
+  return {
+    app: 'keyframe-map', version: 1,
+    nodes: nodes.map(n => ({
+      id: n.id, name: n.name,
+      x: Math.round(n.x * 10) / 10, y: Math.round(n.y * 10) / 10,
+      imageFile: n.image || null,
+      imageHash: n.image ? (mediaHash.get(n.image) || n.imageHash || null) : null,
+      previewW: n.image ? Math.round(n.pw * 10) / 10 : null,
+      previewH: n.image ? Math.round(n.ph * 10) / 10 : null
+    })),
+    arrows: arrows.map(a => {
+      const gm = geom(a), f = nodeById(a.from), t = nodeById(a.to);
+      return {
+        id: a.id, from: a.from == null ? null : a.from, to: a.to == null ? null : a.to,   // 未リンクの矢印は null
+        x: gm ? Math.round(gm.mid.x * 10) / 10 : null,
+        y: gm ? Math.round(gm.mid.y * 10) / 10 : null,
+        angle: f && t ? Math.round(Math.atan2(t.y - f.y, t.x - f.x) * 1800 / Math.PI) / 10 : null,
+        videoFile: a.video || null,
+        videoHash: a.video ? (mediaHash.get(a.video) || a.videoHash || null) : null,
+        previewW: a.video ? Math.round(a.vw * 10) / 10 : null,
+        previewH: a.video ? Math.round(a.vh * 10) / 10 : null
+      };
+    })
+  };
+}
+function deserialize(o) {
+  if (!o || !Array.isArray(o.nodes)) throw new Error('形式が正しくありません');
+  vids.forEach(v => v.el.pause());
+  nodes = o.nodes.map(n => {
+    const img = n.imageFile || null;
+    return {
+      id: String(n.id ?? uid()), name: String(n.name ?? ''), x: +n.x || 0, y: +n.y || 0,
+      image: img, imageHash: img ? (n.imageHash || null) : null,
+      pw: img ? (+n.previewW || 160) : null, ph: img ? (+n.previewH || 120) : null
+    };
+  });
+  const ids = new Set(nodes.map(n => n.id));
+  arrows = (o.arrows || []).filter(a => {
+    const hasF = a.from != null, hasT = a.to != null;
+    if (hasF && hasT) return ids.has(String(a.from)) && ids.has(String(a.to));
+    return !hasF && !hasT && !!a.videoFile;  // 未リンクの矢印（動画が必要）
+  }).map(a => {
+    const v = a.videoFile || null, free = a.from == null;
+    return {
+      id: String(a.id ?? uid()), from: free ? null : String(a.from), to: free ? null : String(a.to),
+      ux: free ? (+a.x || 0) : null, uy: free ? (+a.y || 0) : null,
+      video: v, videoHash: v ? (a.videoHash || null) : null,
+      vw: v ? (+a.previewW || 200) : null, vh: v ? (+a.previewH || 113) : null
+    };
+  });
+  clearSel(); updateConnUI();
+}
+function missingMedia() {
+  const s = new Set();
+  nodes.forEach(n => { if (n.image && !media.has(n.image)) s.add(n.image); });
+  arrows.forEach(a => { if (a.video && !media.has(a.video)) s.add(a.video); });
+  return s.size;
+}
+async function saveJSON() {
+  if (hashJobs.size) await Promise.all([...hashJobs.values()]);   // 計算中のハッシュを待つ
+  const blob = new Blob([JSON.stringify(serialize(), null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'keyframe-map.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast('JSONを保存しました');
+}
+$('#jsonPick').onchange = async e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  try {
+    deserialize(JSON.parse(await f.text()));
+    const rn = relinkRefs();                 // 既に読み込み済みのメディアとハッシュ照合
+    save(); draw();
+    const m = missingMedia();
+    toast('読み込み完了' + (rn ? `（ハッシュ一致で ${rn} 件のファイル名を更新）` : '') +
+      (m ? `　未リンクのメディア ${m} 件：ファイル→メディア再リンク` : ''));
+  } catch (err) { toast('読み込み失敗：' + err.message); }
+};
+
+/* メディア再リンク：JSONのファイル名・ハッシュのどちらにも該当しないファイルは新規として読み込む
+   （静止画→新規ノード、動画→ノードにつながっていない「未リンクの矢印」） */
+const isImageFile = f => (f.type || '').startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp|svg|heic|heif)$/i.test(f.name);
+const isVideoFile = f => (f.type || '').startsWith('video/') || /\.(mp4|m4v|mov|webm|mkv|avi|ogv|3gp)$/i.test(f.name);
+function freeOrigin() {                      // 新規アイテムを並べ始める位置（既存の内容の下）
+  let minX = Infinity, maxY = -Infinity;
+  nodes.forEach(n => { const b = box(n); minX = Math.min(minX, n.x - b.w / 2); maxY = Math.max(maxY, n.y + b.h / 2 + 30); });
+  arrows.forEach(a => {
+    const gm = a.video && geom(a); if (!gm) return;
+    minX = Math.min(minX, gm.vc.x - a.vw / 2); maxY = Math.max(maxY, gm.vc.y + a.vh / 2 + 50);
+  });
+  if (!isFinite(minX)) { const p = toWorld(80, 120); return { x: p.x, y: p.y }; }
+  return { x: minX, y: maxY + 40 };
+}
+const GRID = { cols: 5, dx: 260, dy: 250 };
+$('#mediaPick').onchange = async e => {
+  const files = [...e.target.files]; e.target.value = '';
+  if (!files.length) return;
+  files.forEach(f => registerFile(f));
+  draw();
+  toast('ファイルを照合中…');
+  await Promise.all(files.map(f => hashJobs.get(f.name)));
+  const rn = relinkRefs();                   // 名前が見つからないものはハッシュ一致で付け替え
+
+  // ファイル名でもハッシュでもJSONの内容に該当しなかったファイルを新規として追加
+  const used = new Set();
+  nodes.forEach(n => { if (n.image) used.add(n.image); });
+  arrows.forEach(a => { if (a.video) used.add(a.video); });
+  const fresh = files.filter(f => !used.has(f.name));
+  const newImgs = fresh.filter(isImageFile), newVids = fresh.filter(f => !isImageFile(f) && isVideoFile(f));
+  const placed = [];
+  let framed = 0, badVids = 0;               // フレームを自動生成できた動画の数／読み込めなかった動画の数
+  if (newImgs.length || newVids.length) {
+    const o = freeOrigin();
+    const spot = i => {                      // i番目のセルの中心
+      const p = { x: o.x + GRID.dx / 2 + (i % GRID.cols) * GRID.dx, y: o.y + GRID.dy / 2 + Math.floor(i / GRID.cols) * GRID.dy };
+      placed.push(p); return p;
+    };
+    newImgs.forEach((f, i) => {
+      const p = spot(i);
+      const n = { id: uid(), name: f.name, x: p.x, y: p.y, image: null, imageHash: null, pw: null, ph: null };
+      nodes.push(n);
+      applyNodeImage(n, f.name);
+    });
+    // 動画は画像の次の行から。先頭フレーム→動画→最終フレームの3点セットを横に並べる（1行に2セット）
+    const SET_W = 640, SET_PER_ROW = 2;
+    let col = 0, rowTop = o.y + Math.ceil(newImgs.length / GRID.cols) * GRID.dy, rowH = 0;
+    if (newVids.length) toast('動画から先頭・最終フレームを生成中…');
+    for (const f of newVids) {
+      const a = { id: uid(), from: null, to: null, ux: o.x, uy: o.y, video: null, videoHash: null, vw: null, vh: null };
+      arrows.push(a);
+      const ok = await new Promise(res => applyArrowVideo(a, f.name,
+        () => { arrows = arrows.filter(x => x !== a); draw(); res(false); },   // 読み込めなければ取り消す
+        () => res(true)));
+      if (!ok) { badVids++; continue; }
+      const h = Math.max(a.vh + 70, 160 * a.vh / a.vw + 40);          // 縦長の動画でも重ならない行の高さ
+      if (col === SET_PER_ROW) { col = 0; rowTop += rowH; rowH = 0; }
+      a.ux = o.x + SET_W / 2 + col * SET_W; a.uy = rowTop + h / 2;
+      placed.push({ x: a.ux, y: a.uy });
+      rowH = Math.max(rowH, h); col++;
+      if (await autoFrames(a)) framed++;
+    }
+    if (placed.length) {                     // 追加したアイテムが見える位置へ移動
+      const cx = (Math.min(...placed.map(p => p.x)) + Math.max(...placed.map(p => p.x))) / 2;
+      const cy = (Math.min(...placed.map(p => p.y)) + Math.max(...placed.map(p => p.y))) / 2;
+      view.x = W / 2 - cx * view.s; view.y = H / 2 - cy * view.s;
+    }
+    clearSel(); updateConnUI();
+  }
+  save(); draw();
+  const m = missingMedia();
+  const parts = [m ? `リンク完了（未リンク ${m} 件）` : 'すべてのメディアをリンクしました'];
+  if (rn) parts.push(`ハッシュ一致でファイル名を更新：${rn} 件`);
+  if (newImgs.length) parts.push(`新規ノード ${newImgs.length} 件を追加`);
+  const addedVids = newVids.length - badVids;
+  if (addedVids) parts.push(framed === addedVids
+    ? `動画 ${framed} 件を追加（先頭・最終フレームのノードを自動生成して接続）`
+    : `未リンクの矢印 ${addedVids} 件を追加（フレーム生成 ${framed} 件）`);
+  toast(parts.join('　'));
+};
+function resetAll() {
+  vids.forEach(v => v.el.pause());
+  nodes = []; arrows = []; generated.clear(); undoSnap = null; clearSel(); updateConnUI(); save(); draw();
+}
+
+/* ---------- 並べ替え ---------- */
+/* ノードを「名前順」または「画像の類似順」に並べたうえで、ノード・動画プレビューが重ならない間隔の格子に置き、
+   ノード同士の入れ替え（焼きなまし法）で矢印の交差をできるだけ減らす */
+const natCmp = (a, b) => a.localeCompare(b, 'ja', { numeric: true, sensitivity: 'base' });
+const sortedByName = () => [...nodes].sort((a, b) => natCmp(a.name || '', b.name || '') || natCmp(a.image || '', b.image || ''));
+let undoSnap = null, arranging = false;
+
+function loadImgEl(name) {
+  return new Promise(res => {
+    const e = getImg(name); if (!e) return res(null);
+    if (e.ok) return res(e.el);
+    if (e.el.complete && !e.el.naturalWidth) return res(null);
+    const to = setTimeout(() => res(null), 5000);
+    e.el.addEventListener('load', () => { clearTimeout(to); res(e.el); }, { once: true });
+    e.el.addEventListener('error', () => { clearTimeout(to); res(null); }, { once: true });
+  });
+}
+async function sortedBySimilarity() {        // 画像を小さな縮小画像にして比べ、似たものが隣り合う順に並べる
+  const FS = 20, c = document.createElement('canvas'); c.width = c.height = FS;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  const feats = [], none = [];
+  for (const n of nodes) {
+    const el = n.image ? await loadImgEl(n.image) : null;
+    if (!el || !el.naturalWidth) { none.push(n); continue; }
+    x.fillStyle = '#000'; x.fillRect(0, 0, FS, FS);
+    const r = Math.min(FS / el.naturalWidth, FS / el.naturalHeight), dw = el.naturalWidth * r, dh = el.naturalHeight * r;
+    x.drawImage(el, (FS - dw) / 2, (FS - dh) / 2, dw, dh);
+    const d = x.getImageData(0, 0, FS, FS).data, v = new Float32Array(FS * FS * 3);
+    for (let i = 0, k = 0; i < d.length; i += 4) { v[k++] = d[i] / 255; v[k++] = d[i + 1] / 255; v[k++] = d[i + 2] / 255; }
+    feats.push({ n, v });
+  }
+  none.sort((a, b) => natCmp(a.name || '', b.name || ''));      // 画像のないノードは最後に名前順
+  const M = feats.length;
+  if (M < 3) return [...feats.map(f => f.n), ...none];
+  const D = Array.from({ length: M }, () => new Float32Array(M));
+  for (let i = 0; i < M; i++) for (let j = i + 1; j < M; j++) {
+    let s = 0; const a = feats[i].v, b = feats[j].v;
+    for (let k = 0; k < a.length; k++) { const d = a[k] - b[k]; s += d * d; }
+    D[i][j] = D[j][i] = Math.sqrt(s);
+  }
+  let start = 0, bestSum = -1;               // 他と最も違うものを端にする
+  for (let i = 0; i < M; i++) { let s = 0; for (let j = 0; j < M; j++) s += D[i][j]; if (s > bestSum) { bestSum = s; start = i; } }
+  const used = new Uint8Array(M), path = [start]; used[start] = 1;
+  while (path.length < M) {                  // 最も近いものを順にたどる
+    const last = path[path.length - 1]; let bj = -1, bd = Infinity;
+    for (let j = 0; j < M; j++) if (!used[j] && D[last][j] < bd) { bd = D[last][j]; bj = j; }
+    used[bj] = 1; path.push(bj);
+  }
+  for (let improved = true, guard = 0; improved && guard < 50; guard++) {   // 2-opt で全体の距離を縮める
+    improved = false;
+    for (let i = 0; i < M - 1; i++) for (let j = i + 1; j < M; j++) {
+      const a = i > 0 ? D[path[i - 1]][path[i]] : 0, b = j < M - 1 ? D[path[j]][path[j + 1]] : 0;
+      const a2 = i > 0 ? D[path[i - 1]][path[j]] : 0, b2 = j < M - 1 ? D[path[i]][path[j + 1]] : 0;
+      if (a2 + b2 < a + b - 1e-6) { path.splice(i, j - i + 1, ...path.slice(i, j + 1).reverse()); improved = true; }
+    }
+  }
+  return [...path.map(i => feats[i].n), ...none];
+}
+
+function layoutNodes(order) {
+  const N = order.length, idx = new Map(order.map((n, i) => [n.id, i]));
+  const nw = order.map(n => box(n).w), nh = order.map(n => box(n).h + (n.image ? 22 : 0));
+  const edges = [];
+  arrows.forEach(a => {
+    if (isFree(a)) return;
+    const f = idx.get(a.from), t = idx.get(a.to);
+    if (f == null || t == null || f === t) return;
+    edges.push({ f, t, both: arrows.some(x => x.from === a.to && x.to === a.from), vid: !!a.video, vw: a.vw || 0, vh: a.vh || 0 });
+  });
+  const EN = edges.length, inc = order.map(() => []);
+  edges.forEach((e, i) => { inc[e.f].push(i); inc[e.t].push(i); });
+  const maxNW = Math.max(...nw), maxNH = Math.max(...nh);
+  const pv = edges.filter(e => e.vid);
+  const maxPW = pv.length ? Math.max(...pv.map(e => e.vw)) : 0, maxPH = pv.length ? Math.max(...pv.map(e => e.vh + 50)) : 0;
+  const W_X = 100, W_T = 60, W_O = 400, W_L = 3, W_R = 4;   // 交差／ノード貫通／重なり／矢印の長さ／並び順からのずれ
+
+  const px = new Float64Array(N), py = new Float64Array(N), slotOf = new Int32Array(N);
+  const dflag = new Uint8Array(N), stamp = new Int32Array(EN); let stampId = 0;
+  let cw = 0, ch = 0, cols = 1, rows = 1, S = 1, occ = null;
+  const A = new Float64Array(4), B = new Float64Array(4), T = new Float64Array(4);
+  const nrect = (i, o) => { o[0] = px[i] - nw[i] / 2 - 6; o[1] = py[i] - nh[i] / 2 - 6; o[2] = px[i] + nw[i] / 2 + 6; o[3] = py[i] + nh[i] / 2 + 6; };
+  const prect = (e, o) => {                  // 動画プレビュー（シークバーとファイル名の分を含む）
+    const E = edges[e], fx = px[E.f], fy = py[E.f], tx = px[E.t], ty = py[E.t];
+    const dx = tx - fx, dy = ty - fy, len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len;
+    let cx = (fx + tx) / 2, cy = (fy + ty) / 2;
+    if (E.both) {
+      cx += nx * OFF; cy += ny * OFF;
+      const ex = (Math.abs(nx) * E.vw + Math.abs(ny) * E.vh) / 2 + 4;
+      cx += nx * ex; cy += ny * ex;
+    }
+    o[0] = cx - E.vw / 2 - 4; o[1] = cy - E.vh / 2 - 4; o[2] = cx + E.vw / 2 + 4; o[3] = cy + E.vh / 2 + 46;
+  };
+  const hit = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+  const segX = (ax, ay, bx, by, cx, cy, dx, dy) => {
+    const d1 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax), d2 = (bx - ax) * (dy - ay) - (by - ay) * (dx - ax);
+    const d3 = (dx - cx) * (ay - cy) - (dy - cy) * (ax - cx), d4 = (dx - cx) * (by - cy) - (dy - cy) * (bx - cx);
+    return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+  };
+  const segRect = (x1, y1, x2, y2, k) => {   // 線分がノードkの矩形を通るか（Liang–Barsky）
+    nrect(k, T);
+    let t0 = 0, t1 = 1;
+    const clip = (p, q) => {
+      if (p === 0) return q >= 0;
+      const r = q / p;
+      if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; }
+      else { if (r < t0) return false; if (r < t1) t1 = r; }
+      return true;
+    };
+    const dx = x2 - x1, dy = y2 - y1;
+    return clip(-dx, x1 - T[0]) && clip(dx, T[2] - x1) && clip(-dy, y1 - T[1]) && clip(dy, T[3] - y1);
+  };
+  /* dn のノードが関わる項目だけを数える（全ノードを渡せば全体の値になる） */
+  function local(dn) {
+    stampId++;
+    const AE = [];
+    for (const d of dn) { dflag[d] = 1; for (const e of inc[d]) if (stamp[e] !== stampId) { stamp[e] = stampId; AE.push(e); } }
+    let cross = 0, thru = 0, over = 0, len = 0, rank = 0;
+    for (const e of AE) {
+      const E1 = edges[e], x1 = px[E1.f], y1 = py[E1.f], x2 = px[E1.t], y2 = py[E1.t];
+      for (let e2 = 0; e2 < EN; e2++) {
+        if (e2 === e || (stamp[e2] === stampId && e2 < e)) continue;
+        const E2 = edges[e2];
+        if (E2.f === E1.f || E2.f === E1.t || E2.t === E1.f || E2.t === E1.t) continue;
+        if (segX(x1, y1, x2, y2, px[E2.f], py[E2.f], px[E2.t], py[E2.t])) cross++;
+      }
+      for (let k = 0; k < N; k++) { if (k !== E1.f && k !== E1.t && segRect(x1, y1, x2, y2, k)) thru++; }
+      len += Math.hypot(x2 - x1, y2 - y1) / cw;
+    }
+    for (let e2 = 0; e2 < EN; e2++) {
+      if (stamp[e2] === stampId) continue;
+      const E2 = edges[e2];
+      for (const d of dn) if (segRect(px[E2.f], py[E2.f], px[E2.t], py[E2.t], d)) thru++;
+    }
+    for (const d of dn) {
+      nrect(d, A);
+      for (let k = 0; k < N; k++) { if (k === d || (dflag[k] && k < d)) continue; nrect(k, B); if (hit(A, B)) over++; }
+      for (let e = 0; e < EN; e++) { if (!edges[e].vid) continue; prect(e, B); if (hit(A, B)) over++; }
+      const s = slotOf[d];
+      rank += Math.abs(s % cols - d % cols) + Math.abs(((s / cols) | 0) - ((d / cols) | 0));
+    }
+    for (const e of AE) {
+      if (!edges[e].vid) continue;
+      prect(e, A);
+      for (let k = 0; k < N; k++) { if (dflag[k]) continue; nrect(k, B); if (hit(A, B)) over++; }
+      for (let e2 = 0; e2 < EN; e2++) {
+        if (e2 === e || !edges[e2].vid || (stamp[e2] === stampId && e2 < e)) continue;
+        prect(e2, B); if (hit(A, B)) over++;
+      }
+    }
+    for (const d of dn) dflag[d] = 0;
+    return { cross, thru, over, len, rank };
+  }
+  const cost = r => r.cross * W_X + r.thru * W_T + r.over * W_O + r.len * W_L + r.rank * W_R;
+  const place = (i, s) => { slotOf[i] = s; px[i] = (s % cols) * cw; py[i] = ((s / cols) | 0) * ch; };
+  const all = order.map((_, i) => i);
+
+  function attempt(f, budget) {
+    cw = Math.max(maxNW + 30, (maxNW + maxPW + 30) * f);
+    ch = Math.max(maxNH + 30, (maxNH + maxPH + 30) * f);
+    S = Math.ceil(N * 1.3) + 1;                                   // 空きの区画を少し用意して移動しやすくする
+    const aspect = clamp(W / H, 0.8, 2);
+    cols = clamp(Math.ceil(Math.sqrt(S * (ch / cw) * aspect)), 1, S);
+    rows = Math.ceil(S / cols); S = cols * rows;
+    occ = new Int32Array(S).fill(-1);
+    for (let i = 0; i < N; i++) { place(i, i); occ[i] = i; }      // まず並び順どおりに配置
+    let best = 0, bestSlots = slotOf.slice();
+    if (N > 1) {
+      const T0 = 100, T1 = 1, t0ms = performance.now();
+      let it = 0, Tm = T0, cum = 0;
+      for (;;) {
+        if ((it++ & 127) === 0) {
+          const el = performance.now() - t0ms;
+          if (el > budget) break;
+          Tm = T0 * Math.pow(T1 / T0, el / budget);
+        }
+        const a = (Math.random() * N) | 0, sa = slotOf[a];
+        let s;
+        if (Math.random() < 0.6) {
+          const c = sa % cols, r = (sa / cols) | 0;
+          s = clamp(r + ((Math.random() * 5) | 0) - 2, 0, rows - 1) * cols + clamp(c + ((Math.random() * 5) | 0) - 2, 0, cols - 1);
+        } else s = (Math.random() * S) | 0;
+        if (s === sa) continue;
+        const b = occ[s], dn = b >= 0 ? [a, b] : [a];
+        const before = cost(local(dn));
+        place(a, s); occ[s] = a;
+        if (b >= 0) { place(b, sa); occ[sa] = b; } else occ[sa] = -1;
+        const delta = cost(local(dn)) - before;
+        if (delta <= 0 || Math.random() < Math.exp(-delta / Tm)) {
+          cum += delta;
+          if (cum < best - 1e-9) { best = cum; bestSlots = slotOf.slice(); }
+        } else {                                                  // 元に戻す
+          place(a, sa); occ[sa] = a;
+          if (b >= 0) { place(b, s); occ[s] = b; } else occ[s] = -1;
+        }
+      }
+    }
+    for (let i = 0; i < N; i++) place(i, bestSlots[i]);
+    const st = local(all);
+    return { slots: bestSlots, cw, ch, cols, st };
+  }
+
+  const budget = clamp(120 + N * 12, 150, 500);
+  let pick = null;
+  for (const f of [0.7, 1.0, 1.3, 1.7, 2.2]) {    // 重ならない最も詰まった間隔を採用
+    const r = attempt(f, budget);
+    const bad = r.st.over * 1000 + r.st.cross + r.st.thru;
+    if (!pick || bad < pick.bad) pick = { ...r, bad };
+    if (!r.st.over) break;
+  }
+  cw = pick.cw; ch = pick.ch; cols = pick.cols;
+  for (let i = 0; i < N; i++) place(i, pick.slots[i]);
+  let ox = 0, oy = 0, x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  order.forEach(n => { ox += n.x; oy += n.y; });
+  ox /= N; oy /= N;                                               // 元の中心の位置に置く
+  for (let i = 0; i < N; i++) { x0 = Math.min(x0, px[i]); x1 = Math.max(x1, px[i]); y0 = Math.min(y0, py[i]); y1 = Math.max(y1, py[i]); }
+  order.forEach((n, i) => { n.x = px[i] - (x0 + x1) / 2 + ox; n.y = py[i] - (y0 + y1) / 2 + oy; });
+  return pick.st;
+}
+
+function contentBox(skipFree) {              // ノードと動画プレビューを囲む範囲
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const add = (ax, ay, bx, by) => { x0 = Math.min(x0, ax); y0 = Math.min(y0, ay); x1 = Math.max(x1, bx); y1 = Math.max(y1, by); };
+  nodes.forEach(n => { const b = box(n); add(n.x - b.w / 2, n.y - b.h / 2, n.x + b.w / 2, n.y + b.h / 2 + (n.image ? 22 : 0)); });
+  arrows.forEach(a => {
+    if (!a.video || (skipFree && isFree(a))) return;
+    const g = geom(a); if (g) add(g.vc.x - a.vw / 2, g.vc.y - a.vh / 2, g.vc.x + a.vw / 2, g.vc.y + a.vh / 2 + 46);
+  });
+  return isFinite(x0) ? { x0, y0, x1, y1 } : null;
+}
+function placeFreeArrows() {                 // 未リンクの矢印は、ノードの下に動画名順で並べる
+  const fr = arrows.filter(a => isFree(a) && a.video).sort((a, b) => natCmp(a.video, b.video));
+  if (!fr.length) return;
+  const bb = contentBox(true) || { x0: 0, y0: 0, x1: 900, y1: -70 };
+  const maxW = Math.max(bb.x1 - bb.x0, 900);
+  let cx = bb.x0, top = bb.y1 + 70, rowH = 0;
+  for (const a of fr) {
+    if (cx > bb.x0 && cx + a.vw > bb.x0 + maxW) { cx = bb.x0; top += rowH + 30; rowH = 0; }
+    a.ux = cx + a.vw / 2; a.uy = top + a.vh / 2;
+    cx += a.vw + 50; rowH = Math.max(rowH, a.vh + 50);
+  }
+}
+function fitView() {                         // 全体が画面に収まるように表示を合わせる
+  const bb = contentBox(false); if (!bb) return;
+  const bw = bb.x1 - bb.x0, bh = bb.y1 - bb.y0;
+  const s = clamp(Math.min((W - 32) / bw, (H - 130) / bh), 0.15, 1);
+  view.s = s; view.x = W / 2 - (bb.x0 + bw / 2) * s; view.y = (H + 60) / 2 - (bb.y0 + bh / 2) * s;
+}
+async function arrange(kind) {
+  if (arranging) return;
+  if (!nodes.length && !arrows.some(a => isFree(a) && a.video)) return toast('並べ替えるノードがありません');
+  arranging = true; closePopups();
+  toast(kind === 'name' ? '並べ替え中…' : '画像の類似度を計算して並べ替え中…');
+  try {
+    await new Promise(r => setTimeout(r, 30));
+    const snap = { pos: nodes.map(n => [n, n.x, n.y]), free: arrows.filter(isFree).map(a => [a, a.ux, a.uy]), view: { ...view } };
+    const order = kind === 'name' ? sortedByName() : await sortedBySimilarity();
+    const st = nodes.length ? layoutNodes(order) : { cross: 0, thru: 0, over: 0 };
+    placeFreeArrows();
+    undoSnap = snap; fitView(); save(); draw();
+    const note = [];
+    if (st.thru) note.push(`ノードを貫く矢印 ${st.thru} 件`);
+    if (st.over) note.push(`重なり ${st.over} 件`);
+    toast(`並べ替えました（矢印の交差 ${st.cross} 件${note.length ? '、' + note.join('、') : ''}）`);
+  } catch (err) { toast('並べ替えに失敗しました'); }
+  finally { arranging = false; }
+}
+function undoArrange() {
+  if (!undoSnap) return toast('元に戻せる並べ替えがありません');
+  const s = undoSnap; undoSnap = null;
+  s.pos.forEach(([n, x, y]) => { n.x = x; n.y = y; });
+  s.free.forEach(([a, x, y]) => { a.ux = x; a.uy = y; });
+  Object.assign(view, s.view);
+  save(); draw(); toast('並べ替えを元に戻しました');
+}
+
+/* ---------- 自動保存（メディア本体は保存されません） ---------- */
+let saveT = 0;
+function save() {
+  clearTimeout(saveT);
+  saveT = setTimeout(() => { try { localStorage.setItem(STORE, JSON.stringify(serialize())); } catch (_) {} }, 300);
+}
+
+/* ---------- フルスクリーン ---------- */
+const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+$('#fsBtn').onclick = async () => {
+  const d = document.documentElement;
+  try {
+    if (fsEl()) await (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    else if (d.requestFullscreen || d.webkitRequestFullscreen) await (d.requestFullscreen || d.webkitRequestFullscreen).call(d);
+    else toast('このブラウザはフルスクリーンに対応していません（ホーム画面に追加すると全画面で使えます）');
+  } catch (_) { toast('フルスクリーンにできませんでした'); }
+};
+['fullscreenchange', 'webkitfullscreenchange'].forEach(ev =>
+  document.addEventListener(ev, () => $('#fsBtn').classList.toggle('on', !!fsEl())));
+
+/* ---------- 連続再生プレイヤー ---------- */
+const player = $('#player'), pImg = $('#pImg'), pVid = $('#pVid'), pCap = $('#pCap');
+const STILL_MS = 1500;                       // 静止画1枚の表示時間
+let playId = 0, stillTimer = 0, pFail = 0, pHops = 0;
+
+const nodeOK = n => !!(n && n.image && media.has(n.image));
+const arrowOK = a => !!(a && a.video && media.has(a.video));
+const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+function playables() {
+  const l = [];
+  nodes.forEach(n => { if (nodeOK(n)) l.push({ k: 'node', id: n.id }); });
+  arrows.forEach(a => { if (arrowOK(a)) l.push({ k: 'arrow', id: a.id }); });
+  return l;
+}
+function randomItem(exclude) {
+  const l = playables();
+  if (!l.length) return null;
+  const c = exclude && l.length > 1 ? l.filter(i => !(i.k === exclude.k && i.id === exclude.id)) : l;
+  return pick(c);
+}
+function nextItem(it) {
+  if (it.k === 'arrow') {
+    const a = arrowById(it.id);
+    return a && nodeById(a.to) ? { k: 'node', id: a.to } : null;   // 未リンクの矢印は行き先がないのでランダムへ
+  }
+  const outs = arrows.filter(a => a.from === it.id && nodeById(a.to));
+  if (!outs.length) return null;
+  const ok = outs.filter(arrowOK);
+  return { k: 'arrow', id: pick(ok.length ? ok : outs).id };
+}
+function startItem() {
+  if (sel.arrow && arrowById(sel.arrow)) return { k: 'arrow', id: sel.arrow };
+  if (sel.nodes.length && nodeById(sel.nodes[0])) return { k: 'node', id: sel.nodes[0] };
+  return randomItem(null);
+}
+function goNext(it) {
+  playItem(nextItem(it) || randomItem(it));  // リンク先がなければランダム
+}
+function passThrough(it) {                   // 再生できない項目は飛ばして次へ
+  if (++pHops > nodes.length + arrows.length + 2) { pHops = 0; return playItem(randomItem(it)); }
+  goNext(it);
+}
+function fail(it) {
+  if (++pFail > 5) return stopPlayer('メディアを再生できませんでした');
+  passThrough(it);
+}
+function showStill(url, cap, my, done, ng) {
+  pVid.pause();
+  pImg.src = url;
+  const reveal = () => {
+    if (my !== playId) return;
+    pImg.style.visibility = 'visible'; pVid.style.visibility = 'hidden';
+    pCap.textContent = cap; done();
+  };
+  (pImg.decode ? pImg.decode() : Promise.resolve()).then(reveal, () => { if (my === playId) ng(); });
+}
+function playItem(it) {
+  const my = ++playId;
+  clearTimeout(stillTimer);
+  if (!it) return stopPlayer('再生できるメディアがありません');
+  if (it.k === 'node') {
+    const n = nodeById(it.id);
+    if (!nodeOK(n)) return passThrough(it);
+    showStill(media.get(n.image), n.name || n.image, my, () => {
+      pHops = 0; pFail = 0;
+      stillTimer = setTimeout(() => { if (my === playId) goNext(it); }, STILL_MS);
+    }, () => fail(it));
+  } else {
+    const a = arrowById(it.id);
+    if (!arrowOK(a)) return passThrough(it);
+    pVid.onplaying = () => {
+      if (my !== playId) return;
+      pHops = 0; pFail = 0;
+      pVid.style.visibility = 'visible'; pImg.style.visibility = 'hidden';
+      pCap.textContent = a.video;
+    };
+    pVid.onended = () => { if (my === playId) goNext(it); };
+    pVid.onerror = () => { if (my === playId) fail(it); };
+    pVid.src = media.get(a.video);
+    const pr = pVid.play();
+    if (pr && pr.catch) pr.catch(err => {
+      if (my !== playId || (err && err.name === 'AbortError')) return;
+      if (err && err.name === 'NotAllowedError') {   // 自動再生が制限される環境ではミュートで再生
+        pVid.muted = true;
+        pVid.play().catch(() => { if (my === playId) fail(it); });
+      } else fail(it);
+    });
+  }
+}
+function openPlayer() {
+  vids.forEach(e => e.el.pause());
+  closePopups();
+  const it = startItem();
+  if (!it || !playables().length) {
+    toast('再生できるメディアがありません（画像・動画を指定／再リンクしてください）');
+    return;
+  }
+  pFail = 0; pHops = 0; pVid.muted = false;
+  player.hidden = false;
+  playItem(it);
+}
+function stopPlayer(msg) {
+  playId++; clearTimeout(stillTimer);
+  pVid.onplaying = pVid.onended = pVid.onerror = null;
+  pVid.pause(); pVid.removeAttribute('src'); pVid.load();
+  pImg.removeAttribute('src');
+  pImg.style.visibility = pVid.style.visibility = 'hidden';
+  pCap.textContent = '';
+  player.hidden = true;
+  draw();
+  if (msg) toast(msg);
+}
+$('#playBtn').onclick = openPlayer;
+$('#pClose').onclick = () => stopPlayer();
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !player.hidden) stopPlayer(); });
+
+/* ---------- 起動 ---------- */
+function resize() {
+  dpr = window.devicePixelRatio || 1; W = innerWidth; H = innerHeight;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  draw();
+}
+window.addEventListener('resize', resize);
+resize();
+view.x = W / 2; view.y = H / 2;
+try { const s = localStorage.getItem(STORE); if (s) deserialize(JSON.parse(s)); } catch (_) {}
+setMode('pencil');
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+}
+})();
+</script>
+</body>
+</html>
