@@ -156,6 +156,7 @@
 
 <input id="imgPick" type="file" accept="image/*" hidden>
 <input id="vidPick" type="file" accept="video/*" hidden>
+<input id="zipPick" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden>
 <input id="jsonPick" type="file" accept=".json,application/json" hidden>
 <input id="mediaPick" type="file" accept="image/*,video/*" multiple hidden>
 
@@ -176,6 +177,7 @@ let nowPlaying = null;                       // 連続再生中の項目 {k:'nod
 const YEL = '#ffe600';
 const isNow = (k, id) => !!nowPlaying && nowPlaying.k === k && nowPlaying.id === id;
 let mode = 'pencil';
+const mediaFile = new Map();                 // ファイル名 -> File（ZIP保存用）
 const media = new Map();                     // ファイル名 -> objectURL
 const imgs = new Map(), vids = new Map();    // ファイル名 -> {el, ok}
 const uid = () => Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
@@ -223,6 +225,7 @@ function registerFile(file) {
   const old = media.get(file.name);
   if (old) URL.revokeObjectURL(old);
   media.set(file.name, URL.createObjectURL(file));
+  mediaFile.set(file.name, file);
   imgs.delete(file.name);
   arrows.forEach(a => { if (a.video === file.name) a.rt = 'idle'; });
   const v = vids.get(file.name);
@@ -931,6 +934,8 @@ $('#fileBtn').onclick = e => {
   showPopup(r.left, r.bottom + 6, [
     { label: '💾 保存（JSON）', fn: saveJSON },
     { label: '📂 読み込み（JSON）', fn: () => $('#jsonPick').click() },
+    { label: '📦 保存（ZIP）', fn: saveZIP },
+    { label: '📥 読み込み（ZIP）', fn: () => $('#zipPick').click() },
     { label: '🔄 メディア再リンク（複数選択）', fn: () => $('#mediaPick').click() },
     { label: '🖼 生成した静止画を保存', fn: saveGenerated },
     { label: '🗑 新規作成', fn: () => { if (confirm('現在の内容を破棄して新規作成しますか？')) resetAll(); } }
@@ -1555,6 +1560,118 @@ document.addEventListener('drop', e => {
   if (!files.length) return toast('画像・動画ファイルをドロップしてください');
   closePopups(); relinkFiles(files);
 });
+/* ---------- ZIP（JSON＋画像・動画をまとめて保存／読み込み） ---------- */
+/* 画像・動画はすでに圧縮されているため、保存は無圧縮（store）。読み込みは store／deflate に対応 */
+const ZIP_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif', bmp: 'image/bmp', svg: 'image/svg+xml',
+  mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', mkv: 'video/x-matroska', ogv: 'video/ogg', '3gp': 'video/3gpp' };
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+async function crc32Blob(b) {
+  let c = 0xFFFFFFFF;
+  for (let o = 0; o < b.size; o += CHUNK) {
+    const u = new Uint8Array(await b.slice(o, o + CHUNK).arrayBuffer());
+    for (let i = 0; i < u.length; i++) c = CRC_T[(c ^ u[i]) & 255] ^ (c >>> 8);
+  }
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+async function buildZip(entries) {
+  if (entries.length > 65535) throw new Error('ファイル数が多すぎます');
+  const enc = new TextEncoder(), d = new Date();
+  const dt = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const dd = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  const parts = [], cds = [];
+  let off = 0;
+  for (const e of entries) {
+    const nm = enc.encode(e.name), sz = e.blob.size, crc = await crc32Blob(e.blob);
+    if (sz > 0xFFFFFFFF) throw new Error('4GB を超えるファイルは含められません');
+    const h = new DataView(new ArrayBuffer(30));
+    h.setUint32(0, 0x04034b50, true); h.setUint16(4, 20, true); h.setUint16(6, 0x0800, true); h.setUint16(8, 0, true);
+    h.setUint16(10, dt, true); h.setUint16(12, dd, true); h.setUint32(14, crc, true); h.setUint32(18, sz, true); h.setUint32(22, sz, true);
+    h.setUint16(26, nm.length, true); h.setUint16(28, 0, true);
+    parts.push(h.buffer, nm, e.blob);
+    const c = new DataView(new ArrayBuffer(46));
+    c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(8, 0x0800, true); c.setUint16(10, 0, true);
+    c.setUint16(12, dt, true); c.setUint16(14, dd, true); c.setUint32(16, crc, true); c.setUint32(20, sz, true); c.setUint32(24, sz, true);
+    c.setUint16(28, nm.length, true); c.setUint32(42, off, true);
+    cds.push(c.buffer, nm);
+    off += 30 + nm.length + sz;
+    if (off > 0xFFFFFFFF) throw new Error('ZIP の上限（4GB）を超えます');
+  }
+  const cdSize = cds.reduce((n, b) => n + (b.byteLength !== undefined ? b.byteLength : b.length), 0);
+  const eo = new DataView(new ArrayBuffer(22));
+  eo.setUint32(0, 0x06054b50, true); eo.setUint16(8, entries.length, true); eo.setUint16(10, entries.length, true);
+  eo.setUint32(12, cdSize, true); eo.setUint32(16, off, true);
+  return new Blob([...parts, ...cds, eo.buffer], { type: 'application/zip' });
+}
+async function readZip(file) {               // -> [{ name, blob() }]
+  const tailLen = Math.min(file.size, 66000), tail = new Uint8Array(await file.slice(file.size - tailLen).arrayBuffer());
+  let p = -1;
+  for (let i = tail.length - 22; i >= 0; i--) if (tail[i] === 0x50 && tail[i + 1] === 0x4b && tail[i + 2] === 5 && tail[i + 3] === 6) { p = i; break; }
+  if (p < 0) throw new Error('ZIP ファイルではありません');
+  const eo = new DataView(tail.buffer, tail.byteOffset + p, 22);
+  const count = eo.getUint16(10, true), cdSize = eo.getUint32(12, true), cdOff = eo.getUint32(16, true);
+  if (cdOff === 0xFFFFFFFF || count === 0xFFFF) throw new Error('ZIP64 形式には対応していません');
+  const cd = new DataView(await file.slice(cdOff, cdOff + cdSize).arrayBuffer()), dec = new TextDecoder('utf-8');
+  const out = [];
+  let q = 0;
+  for (let i = 0; i < count && q + 46 <= cd.byteLength; i++) {
+    if (cd.getUint32(q, true) !== 0x02014b50) break;
+    const flags = cd.getUint16(q + 8, true), method = cd.getUint16(q + 10, true), csize = cd.getUint32(q + 20, true);
+    const nl = cd.getUint16(q + 28, true), el = cd.getUint16(q + 30, true), cl = cd.getUint16(q + 32, true), lo = cd.getUint32(q + 42, true);
+    const name = dec.decode(new Uint8Array(cd.buffer, cd.byteOffset + q + 46, nl));
+    q += 46 + nl + el + cl;
+    if (name.endsWith('/') || /(^|\/)(__MACOSX\/|\.DS_Store$)/.test(name) || (flags & 1)) continue;
+    out.push({ name, blob: async () => {
+      const lh = new DataView(await file.slice(lo, lo + 30).arrayBuffer());
+      const ds = lo + 30 + lh.getUint16(26, true) + lh.getUint16(28, true), raw = file.slice(ds, ds + csize);
+      if (method === 0) return raw;
+      if (method === 8 && typeof DecompressionStream !== 'undefined') return await new Response(raw.stream().pipeThrough(new DecompressionStream('deflate-raw'))).blob();
+      throw new Error('未対応の圧縮形式です：' + name);
+    } });
+  }
+  return out;
+}
+function downloadBlob(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+async function saveZIP() {
+  if (hashJobs.size) await Promise.all([...hashJobs.values()]);
+  const names = new Set();
+  nodes.forEach(n => { if (n.image) names.add(n.image); });
+  arrows.forEach(a => { if (a.video) names.add(a.video); });
+  const ents = [{ name: 'keyframe-map.json', blob: new Blob([JSON.stringify(serialize(), null, 2)], { type: 'application/json' }) }];
+  let miss = 0;
+  names.forEach(nm => { const f = mediaFile.get(nm); if (f) ents.push({ name: 'media/' + nm, blob: f }); else miss++; });
+  toast('ZIP を作成中…');
+  try {
+    downloadBlob(await buildZip(ents), 'keyframe-map.zip');
+    toast(`ZIP を保存しました（画像・動画 ${ents.length - 1} 件）` + (miss ? `　未リンクのため含められなかったメディア ${miss} 件` : ''));
+  } catch (err) { toast('ZIP を作成できませんでした：' + err.message); }
+}
+async function loadZIP(file) {
+  try {
+    toast('ZIP を読み込み中…');
+    const ents = await readZip(file);
+    const je = ents.find(e => /(^|\/)keyframe-map\.json$/i.test(e.name)) || ents.find(e => /\.json$/i.test(e.name));
+    if (!je) throw new Error('JSON が見つかりません');
+    const data = JSON.parse(await (await je.blob()).text());
+    const files = [];
+    for (const e of ents) {
+      if (e === je) continue;
+      const base = e.name.split('/').pop(), type = ZIP_MIME[((base.match(/\.([^.]+)$/) || [])[1] || '').toLowerCase()];
+      if (type) files.push(new File([await e.blob()], base, { type }));
+    }
+    deserialize(data);
+    files.forEach(f => registerFile(f));
+    await Promise.all(files.map(f => hashJobs.get(f.name)));
+    relinkRefs(); save(); draw();
+    const m = missingMedia();
+    toast(`ZIP を読み込みました（画像・動画 ${files.length} 件）` + (m ? `　未リンクのメディア ${m} 件` : ''));
+  } catch (err) { toast('ZIP の読み込みに失敗しました：' + err.message); }
+}
+$('#zipPick').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) loadZIP(f); };
 function resetAll() {
   vids.forEach(v => v.el.pause());
   nodes = []; arrows = []; generated.clear(); clearSel(); updateConnUI(); save(); draw();
