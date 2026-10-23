@@ -16,6 +16,14 @@
   .top{position:sticky;top:0;z-index:5;background:var(--bg);padding:max(10px,env(safe-area-inset-top)) 0 10px;border-bottom:1px solid var(--line)}
   .back{display:inline-flex;align-items:center;min-height:44px;padding:0 14px;border:1px solid var(--line);border-radius:10px;
     background:var(--panel);color:var(--fg);text-decoration:none;font-size:15px}
+  .top{display:flex;gap:10px;flex-wrap:wrap}
+  .launch{display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:0 24px;border:1px solid var(--accent);border-radius:12px;
+    background:var(--accent);color:#1b1d24;text-decoration:none;font-size:16px;font-weight:700}
+  .launch.sm{min-height:44px;padding:0 14px;font-size:15px}
+  .shot{margin:20px 0 14px}
+  .shot img{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel2)}
+  .shot figcaption{margin-top:8px;color:var(--sub);font-size:13px;text-align:center}
+  .cta{margin:14px 0 6px;text-align:center}
   h1{font-size:26px;line-height:1.35;margin:28px 0 6px}
   h2{font-size:20px;margin:44px 0 10px;padding-left:12px;border-left:4px solid var(--blue);line-height:1.4}
   h3{font-size:16px;margin:24px 0 4px;color:var(--accent)}
@@ -38,10 +46,13 @@
 </head>
 <body>
 <main>
-  <div class="top"><a class="back" id="back" href="index.html">← アプリに戻る</a></div>
+  <div class="top"><a class="back" id="back" href="../">アプリ一覧に戻る</a><a class="launch sm" href="index.html">アプリを起動する</a></div>
 
   <h1>キーフレームマップ</h1>
   <p class="lead">キャラクターのキーフレーム静止画と、その間をつなぐモーション動画を「状態遷移図」のように配置して、継ぎ目の少ない待機アニメーションを連続・ランダム再生するためのツールです。</p>
+
+  <figure class="shot"><img src="screenshot.jpg" width="1016" height="601" alt="キーフレームマップの画面。キャラクターのキーフレーム画像ノードと動画矢印がキャンバス上に配置されている" decoding="async"><figcaption>キャンバスにキーフレームのノードと動画の矢印を配置したところ</figcaption></figure>
+  <div class="cta"><a class="launch" href="index.html">アプリを起動する</a></div>
 
   <h2>1. このアプリでできること</h2>
   <ul>
