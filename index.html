@@ -221,7 +221,7 @@ async function fileHash(file) {
   let pos = 0; bufs.forEach(b => { all.set(b, pos); pos += b.length; });
   return 'sha256q:' + toHex(await crypto.subtle.digest('SHA-256', all));
 }
-function registerFile(file) {
+function registerFile(file, preHash) {      // preHash：計算済みのハッシュ（省略時はここで計算）
   const old = media.get(file.name);
   if (old) URL.revokeObjectURL(old);
   media.set(file.name, URL.createObjectURL(file));
@@ -232,7 +232,12 @@ function registerFile(file) {
   if (v) { v.el.pause(); vids.delete(file.name); }
   mediaHash.delete(file.name);
   let job;
-  job = fileHash(file).then(h => { if (hashJobs.get(file.name) === job && h) mediaHash.set(file.name, h); return h; }, () => null);
+  if (preHash !== undefined) {
+    job = Promise.resolve(preHash || null);
+    if (preHash) mediaHash.set(file.name, preHash);
+  } else {
+    job = fileHash(file).then(h => { if (hashJobs.get(file.name) === job && h) mediaHash.set(file.name, h); return h; }, () => null);
+  }
   hashJobs.set(file.name, job);
   return file.name;
 }
@@ -1476,6 +1481,41 @@ function freeOrigin() {                      // 新規アイテムを並べ始�
   return { x: minX, y: maxY + 40 };
 }
 const GRID = { cols: 5, dx: 260, dy: 250 };
+/* 同名で内容（ハッシュ）が異なるファイルは別のファイルとして扱い、あとのものに連番（_2, _3…）を付けて両方保持する */
+const serialName = (n, taken) => {
+  const m = n.replace(/\.[^.]+$/, ''), e = n.slice(m.length);
+  let i = 2; while (taken.has(m + '_' + i + e)) i++;
+  return m + '_' + i + e;
+};
+async function planRelink(files) {           // 戻り値：{ plan:[{file,name,h,same}], renamed:連番を付けた件数 }
+  if (hashJobs.size) await Promise.all([...hashJobs.values()]);
+  const hs = await Promise.all(files.map(f => fileHash(f).catch(() => null)));
+  const refHash = name => {                  // JSONが記録している、そのファイル名のハッシュ
+    const n = nodes.find(x => x.image === name), a = arrows.find(x => x.video === name);
+    return (n && n.imageHash) || (a && a.videoHash) || null;
+  };
+  const taken = new Set(media.keys());       // 連番の名前が衝突しないよう、使用中・参照中・今回選んだ名前を除外
+  files.forEach(f => taken.add(f.name));
+  nodes.forEach(n => { if (n.image) taken.add(n.image); });
+  arrows.forEach(a => { if (a.video) taken.add(a.video); });
+  const groups = new Map();
+  files.forEach((f, i) => { if (!groups.has(f.name)) groups.set(f.name, []); groups.get(f.name).push({ f, h: hs[i] }); });
+  const plan = []; let renamed = 0;
+  for (const [name, list] of groups) {
+    const vars = [];                         // 内容の異なる候補（同じ内容は1つにまとめる。ハッシュ不明なものは同名を同一視）
+    list.forEach(v => { const k = vars.findIndex(x => !x.h || !v.h || x.h === v.h); if (k >= 0) vars[k] = v; else vars.push(v); });
+    const loaded = media.has(name), cur = loaded ? (mediaHash.get(name) || null) : null;
+    let keep;                                // 元の名前のまま使う候補
+    if (loaded) keep = vars.findIndex(v => !cur || !v.h || v.h === cur);   // 読み込み済みと同じ内容のもの
+    else { const rh = refHash(name); keep = Math.max(0, vars.findIndex(v => rh && v.h === rh)); }
+    vars.forEach((v, k) => {
+      if (k === keep) { plan.push({ file: v.f, name, h: v.h, same: !!(loaded && cur && v.h === cur) }); return; }
+      const nn = serialName(name, taken); taken.add(nn); renamed++;
+      plan.push({ file: new File([v.f], nn, { type: v.f.type, lastModified: v.f.lastModified }), name: nn, h: v.h, same: false });
+    });
+  }
+  return { plan, renamed };
+}
 let relinking = false;
 async function relinkFiles(files) {
   if (!files.length) return;
@@ -1484,17 +1524,17 @@ async function relinkFiles(files) {
   try { await relinkRun(files); } finally { relinking = false; }
 }
 async function relinkRun(files) {
-  files.forEach(f => registerFile(f));
-  draw();
   toast('ファイルを照合中…');
-  await Promise.all(files.map(f => hashJobs.get(f.name)));
+  const { plan, renamed: serialN } = await planRelink(files);
+  plan.forEach(p => { if (!p.same) registerFile(p.file, p.h); });   // 読み込み済みと同一内容のものは登録し直さない
+  draw();
   const rn = relinkRefs();                   // 名前が見つからないものはハッシュ一致で付け替え
 
   // ファイル名でもハッシュでもJSONの内容に該当しなかったファイルを新規として追加
   const used = new Set();
   nodes.forEach(n => { if (n.image) used.add(n.image); });
   arrows.forEach(a => { if (a.video) used.add(a.video); });
-  const fresh = files.filter(f => !used.has(f.name));
+  const fresh = plan.map(p => p.file).filter(f => !used.has(f.name));
   const newImgs = fresh.filter(isImageFile), newVids = fresh.filter(f => !isImageFile(f) && isVideoFile(f));
   const placed = [];
   let framed = 0, badVids = 0;               // フレームを自動生成できた動画の数／読み込めなかった動画の数
@@ -1539,6 +1579,7 @@ async function relinkRun(files) {
   const m = missingMedia();
   const parts = [m ? `リンク完了（未リンク ${m} 件）` : 'すべてのメディアをリンクしました'];
   if (rn) parts.push(`ハッシュ一致でファイル名を更新：${rn} 件`);
+  if (serialN) parts.push(`同名で内容が異なるファイル ${serialN} 件に連番を付けて別々に保持`);
   if (newImgs.length) parts.push(`新規ノード ${newImgs.length} 件を追加`);
   const addedVids = newVids.length - badVids;
   if (addedVids) parts.push(framed === addedVids
