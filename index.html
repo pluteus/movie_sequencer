@@ -1792,7 +1792,7 @@ function layoutNodes(order) {
   const maxNW = Math.max(...nw), maxNH = Math.max(...nh);
   const pv = edges.filter(e => e.vid);
   const maxPW = pv.length ? Math.max(...pv.map(e => e.vw)) : 0, maxPH = pv.length ? Math.max(...pv.map(e => e.vh + 50)) : 0;
-  const W_X = 100, W_T = 60, W_O = 400, W_L = 3, W_R = 4;   // 交差／ノード貫通／重なり／矢印の長さ／並び順からのずれ
+  const W_X = 100, W_T = 60, W_O = 400, W_L = 3, W_R = 4, W_D = 40;   // 交差／ノード貫通／重なり／矢印の長さ／並び順からのずれ／矢印の向き（右向きが最小）
 
   const px = new Float64Array(N), py = new Float64Array(N), slotOf = new Int32Array(N);
   const dflag = new Uint8Array(N), stamp = new Int32Array(EN); let stampId = 0;
@@ -1834,9 +1834,13 @@ function layoutNodes(order) {
     stampId++;
     const AE = [];
     for (const d of dn) { dflag[d] = 1; for (const e of inc[d]) if (stamp[e] !== stampId) { stamp[e] = stampId; AE.push(e); } }
-    let cross = 0, thru = 0, over = 0, len = 0, rank = 0;
+    let cross = 0, thru = 0, over = 0, len = 0, rank = 0, dir = 0, back = 0;
     for (const e of AE) {
       const E1 = edges[e], x1 = px[E1.f], y1 = py[E1.f], x2 = px[E1.t], y2 = py[E1.t];
+      if (!E1.both) {                        // 矢印の向き：右向き＝0、縦向き＝0.5、左向き＝1（往復の2本は合計が一定なので対象外）
+        const ddx = x2 - x1, ddy = y2 - y1, dl = Math.hypot(ddx, ddy);
+        if (dl > 0) { dir += (1 - ddx / dl) / 2; if (ddx < -1e-6) back++; }
+      }
       for (let e2 = 0; e2 < EN; e2++) {
         if (e2 === e || (stamp[e2] === stampId && e2 < e)) continue;
         const E2 = edges[e2];
@@ -1868,9 +1872,9 @@ function layoutNodes(order) {
       }
     }
     for (const d of dn) dflag[d] = 0;
-    return { cross, thru, over, len, rank };
+    return { cross, thru, over, len, rank, dir, back };
   }
-  const cost = r => r.cross * W_X + r.thru * W_T + r.over * W_O + r.len * W_L + r.rank * W_R;
+  const cost = r => r.cross * W_X + r.thru * W_T + r.over * W_O + r.len * W_L + r.rank * W_R + r.dir * W_D;
   const place = (i, s) => { slotOf[i] = s; px[i] = (s % cols) * cw; py[i] = ((s / cols) | 0) * ch; };
   const all = order.map((_, i) => i);
 
@@ -1974,12 +1978,13 @@ async function arrange(kind) {
     await new Promise(r => setTimeout(r, 30));
     commitHist(); if (lastSnap) lastSnap.view = { ...view };   // アンドゥで表示位置も戻す
     const order = kind === 'name' ? sortedByName() : await sortedBySimilarity();
-    const st = nodes.length ? layoutNodes(order) : { cross: 0, thru: 0, over: 0 };
+    const st = nodes.length ? layoutNodes(order) : { cross: 0, thru: 0, over: 0, back: 0 };
     placeFreeArrows();
     fitView(); save(); draw();
     const note = [];
     if (st.thru) note.push(`ノードを貫く矢印 ${st.thru} 件`);
     if (st.over) note.push(`重なり ${st.over} 件`);
+    if (st.back) note.push(`左向きの矢印 ${st.back} 件`);
     toast(`並べ替えました（矢印の交差 ${st.cross} 件${note.length ? '、' + note.join('、') : ''}）`);
   } catch (err) { toast('並べ替えに失敗しました'); }
   finally { arranging = false; }
