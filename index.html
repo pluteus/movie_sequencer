@@ -27,7 +27,7 @@
   button:disabled{opacity:.4}
   button.on{border-color:var(--accent);color:var(--accent)}
   #popup{position:fixed;z-index:30;display:flex;flex-direction:column;gap:4px;padding:6px;
-    background:#23262f;border:1px solid #444a5c;border-radius:12px;box-shadow:0 8px 24px #0008;min-width:160px}
+    background:#23262f;border:1px solid #444a5c;border-radius:12px;box-shadow:0 8px 24px #0008;min-width:160px;max-height:calc(100vh - 12px);overflow-y:auto}
   #popup[hidden]{display:none}
   #popup button{text-align:left;border:none;background:transparent;min-height:42px;white-space:nowrap}
   #popup button:active{background:var(--panel2)}
@@ -190,7 +190,7 @@ const toWorld = (px, py) => ({ x: (px - view.x) / view.s, y: (py - view.y) / vie
 const MODES = {
   pencil: '✏️ ペンシル',
   connect: '🔗 接続編集',
-  layout: '📐 レイアウト',
+  layout: '📐 レイアウト・タグ',
   hand: '✋ ハンド'
 };
 const MODE_ICON = { pencil: '✏️', connect: '🔗', layout: '📐', hand: '✋' };
@@ -221,7 +221,7 @@ async function fileHash(file) {
   let pos = 0; bufs.forEach(b => { all.set(b, pos); pos += b.length; });
   return 'sha256q:' + toHex(await crypto.subtle.digest('SHA-256', all));
 }
-function registerFile(file) {
+function registerFile(file, preHash) {      // preHash：計算済みのハッシュ（省略時はここで計算）
   const old = media.get(file.name);
   if (old) URL.revokeObjectURL(old);
   media.set(file.name, URL.createObjectURL(file));
@@ -232,7 +232,12 @@ function registerFile(file) {
   if (v) { v.el.pause(); vids.delete(file.name); }
   mediaHash.delete(file.name);
   let job;
-  job = fileHash(file).then(h => { if (hashJobs.get(file.name) === job && h) mediaHash.set(file.name, h); return h; }, () => null);
+  if (preHash !== undefined) {
+    job = Promise.resolve(preHash || null);
+    if (preHash) mediaHash.set(file.name, preHash);
+  } else {
+    job = fileHash(file).then(h => { if (hashJobs.get(file.name) === job && h) mediaHash.set(file.name, h); return h; }, () => null);
+  }
   hashJobs.set(file.name, job);
   return file.name;
 }
@@ -406,6 +411,89 @@ async function saveGenerated() {             // 生成した静止画を保存�
 
 /* ---------- 幾何 ---------- */
 const box = n => n.image ? { w: n.pw, h: n.ph } : { w: NODE_W, h: NODE_H };
+
+/* ---------- タグ ---------- */
+/* ノード・矢印は tags（文字列の配列）を持てる。ファイル名の下に「タグ名×」のチップで表示し、×で削除できる。
+   配列は破壊的に変更せず、必ず新しい配列に置き換える（アンドゥの履歴と共有しているため） */
+const TAG_RH = 20, TAG_FONT = '11px sans-serif';
+const isArrowObj = o => 'from' in o;
+const cleanTags = t => Array.isArray(t) ? [...new Set(t.map(x => String(x).trim()).filter(Boolean))] : [];
+function tagMaxW(o) { return Math.max(isArrowObj(o) ? (o.vw || 0) : box(o).w, 140); }
+function tagLayout(o) {                      // チップを行ごとに折り返して並べる（行は中央揃え）
+  const tags = o.tags;
+  if (!tags || !tags.length) return { rows: [], h: 0 };
+  const maxW = tagMaxW(o);
+  ctx.save(); ctx.font = TAG_FONT;
+  const rows = []; let cur = null;
+  for (const t of tags) {
+    const label = fit(t, maxW - 26), w = Math.ceil(ctx.measureText(label).width) + 8 + 16;
+    if (!cur || (cur.items.length && cur.w + 4 + w > maxW)) { cur = { items: [], w: 0 }; rows.push(cur); }
+    const x = cur.items.length ? cur.w + 4 : 0;
+    cur.items.push({ tag: t, label, w, x }); cur.w = x + w;
+  }
+  ctx.restore();
+  return { rows, h: rows.length * TAG_RH };
+}
+const tagH = o => tagLayout(o).h;
+function tagAnchor(o) {                      // タグの中心x・上端y（ファイル名の下）
+  if (!isArrowObj(o)) { const b = box(o); return { cx: o.x, top: o.y + b.h / 2 + (o.image ? 22 : 4) }; }
+  const g = geom(o); if (!g) return null;
+  return o.video ? { cx: g.vc.x, top: g.vc.y + o.vh / 2 + 46 } : { cx: g.mid.x, top: g.mid.y + 10 };
+}
+const nodeExtra = n => { const th = tagH(n); return n.image ? 22 + th : th ? th + 4 : 0; };   // ノードの四角の下にはみ出す高さ
+const arrowExtra = a => 46 + tagH(a);                                                          // 動画プレビューの下にはみ出す高さ
+function drawTags(o) {
+  const L = tagLayout(o); if (!L.rows.length) return;
+  const an = tagAnchor(o); if (!an) return;
+  ctx.save(); ctx.font = TAG_FONT; ctx.textBaseline = 'middle'; ctx.lineWidth = 1;
+  L.rows.forEach((r, ri) => {
+    const y = an.top + ri * TAG_RH, left = an.cx - r.w / 2;
+    r.items.forEach(it => {
+      const x = left + it.x;
+      ctx.fillStyle = 'rgba(77,163,255,.22)'; rr(x, y + 1, it.w, TAG_RH - 4, 8); ctx.fill();
+      ctx.strokeStyle = '#4da3ff'; ctx.stroke();
+      ctx.fillStyle = '#d6e8ff'; ctx.textAlign = 'left'; ctx.fillText(it.label, x + 6, y + TAG_RH / 2 - 1);
+      ctx.fillStyle = '#ffb84d'; ctx.textAlign = 'center'; ctx.fillText('×', x + it.w - 9, y + TAG_RH / 2 - 1);
+    });
+  });
+  ctx.restore();
+}
+function hitTagX(wx, wy) {                   // 「×」の位置をタップしたか → { o, tag }
+  const ext = 6 / view.s;
+  const test = o => {
+    const L = tagLayout(o); if (!L.rows.length) return null;
+    const an = tagAnchor(o); if (!an) return null;
+    for (let ri = 0; ri < L.rows.length; ri++) {
+      const r = L.rows[ri], y = an.top + ri * TAG_RH, left = an.cx - r.w / 2;
+      for (const it of r.items) {
+        const x1 = left + it.x + it.w;
+        if (wx >= x1 - 18 - ext && wx <= x1 + ext && wy >= y - ext && wy <= y + TAG_RH + ext) return { o, tag: it.tag };
+      }
+    }
+    return null;
+  };
+  for (let i = nodes.length - 1; i >= 0; i--) { const h = test(nodes[i]); if (h) return h; }
+  for (let i = arrows.length - 1; i >= 0; i--) { const h = test(arrows[i]); if (h) return h; }
+  return null;
+}
+const allTags = () => {                      // 設定済みのタグ（名前順）
+  const m = new Map();
+  [...nodes, ...arrows].forEach(o => (o.tags || []).forEach(t => m.set(t, (m.get(t) || 0) + 1)));
+  return [...m.keys()].sort((a, b) => natCmp(a, b));
+};
+function addTags(list, tags) {
+  tags = cleanTags(tags); if (!tags.length || !list.length) return 0;
+  let n = 0;
+  list.forEach(o => { const add = tags.filter(t => !(o.tags || []).includes(t)); if (add.length) { o.tags = [...(o.tags || []), ...add]; n++; } });
+  if (n) { save(); draw(); }
+  return n;
+}
+function removeTag(list, tag) {
+  let n = 0;
+  list.forEach(o => { if ((o.tags || []).includes(tag)) { o.tags = o.tags.filter(t => t !== tag); n++; } });
+  if (n) { save(); draw(); }
+  return n;
+}
 function exitPoint(c, w, h, st, d) {      // 矩形(中心c)の内側stから方向dへ出る点
   const rx = st.x - c.x, ry = st.y - c.y;
   const tx = d.x > 0 ? (w / 2 - rx) / d.x : d.x < 0 ? (-w / 2 - rx) / d.x : Infinity;
@@ -448,7 +536,7 @@ function distSeg(px, py, a, b) {
 }
 function hitNode(n, x, y) {
   const b = box(n);
-  return Math.abs(x - n.x) <= b.w / 2 && y >= n.y - b.h / 2 && y <= n.y + b.h / 2 + (n.image ? 22 : 0);
+  return Math.abs(x - n.x) <= b.w / 2 && y >= n.y - b.h / 2 && y <= n.y + b.h / 2 + nodeExtra(n);
 }
 function hitTest(x, y) {
   for (let i = nodes.length - 1; i >= 0; i--) if (hitNode(nodes[i], x, y)) return { type: 'node', id: nodes[i].id };
@@ -505,6 +593,7 @@ function render() {
   arrows.forEach(drawArrow);
   nodes.forEach(drawNode);
   arrows.forEach(drawVideo);
+  arrows.forEach(a => { if (!a.video) drawTags(a); });   // 動画のない矢印は線の中間の下にタグを表示
   drawGroupBox();
   ctx.restore();
 
@@ -528,8 +617,8 @@ function grpShown() { return mode === 'layout' && sel.grp && sel.nodes.length + 
 function selBBox() {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   const add = (ax, ay, bx, by) => { x0 = Math.min(x0, ax); y0 = Math.min(y0, ay); x1 = Math.max(x1, bx); y1 = Math.max(y1, by); };
-  sel.nodes.forEach(id => { const n = nodeById(id); if (n) { const b = box(n); add(n.x - b.w / 2, n.y - b.h / 2, n.x + b.w / 2, n.y + b.h / 2 + (n.image ? 22 : 0)); } });
-  sel.garrows.forEach(id => { const a = arrowById(id); if (a && isFree(a) && a.video) add(a.ux - a.vw / 2, a.uy - a.vh / 2, a.ux + a.vw / 2, a.uy + a.vh / 2 + 46); });
+  sel.nodes.forEach(id => { const n = nodeById(id); if (n) { const b = box(n); add(n.x - b.w / 2, n.y - b.h / 2, n.x + b.w / 2, n.y + b.h / 2 + nodeExtra(n)); } });
+  sel.garrows.forEach(id => { const a = arrowById(id); if (a && isFree(a) && a.video) add(a.ux - a.vw / 2, a.uy - a.vh / 2, a.ux + a.vw / 2, a.uy + a.vh / 2 + arrowExtra(a)); });
   if (!isFinite(x0)) return null;
   const pad = 10 / view.s;
   return { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad };
@@ -702,6 +791,9 @@ function drawVideo(a) {
   ctx.fillStyle = '#e8ecf4'; ctx.font = '12px sans-serif';
   ctx.textAlign = 'center'; ctx.textBaseline = 'top';
   ctx.fillText(fit(a.video, Math.max(w, 120)), g.vc.x, y + h + 28);
+  ctx.restore();
+  drawTags(a);
+  ctx.save();
   if (g.free) {                              // ノードにつながっていない矢印の目印
     ctx.fillStyle = '#ffb84d'; ctx.font = 'bold 11px sans-serif';
     ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
@@ -737,10 +829,13 @@ function drawNode(n) {
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(fit(n.name, b.w - 14), n.x, n.y);
   }
+  ctx.restore();
+  drawTags(n);
+  ctx.save();
   if (isNow('node', n.id)) {
     ctx.strokeStyle = YEL; ctx.lineWidth = Math.max(5, 5 / view.s);
     ctx.shadowColor = YEL; ctx.shadowBlur = 18;
-    rr(x - 6, y - 6, b.w + 12, b.h + 12 + (n.image ? 22 : 0), 10); ctx.stroke();
+    rr(x - 6, y - 6, b.w + 12, b.h + 12 + nodeExtra(n), 10); ctx.stroke();
     ctx.shadowBlur = 0;
   }
   if (isSel) {
@@ -925,7 +1020,7 @@ $('#arrBtn').onclick = e => {
   showPopup(r.left, r.bottom + 6, [
     { label: '↶ アンドゥ', disabled: !undoSt.length, fn: undo },
     { label: '↷ リドゥ', disabled: !redoSt.length, fn: redo },
-    { label: '🔤 ノード名でソート', fn: () => arrange('name') },
+    { label: '🏷 タグの類似度でソート', fn: () => arrange('tag') },
     { label: '🖼 画像の類似度でソート', fn: () => arrange('image') }
   ]);
 };
@@ -944,6 +1039,31 @@ $('#fileBtn').onclick = e => {
 
 /* ---------- 長押しメニュー ---------- */
 let pickCtx = null;
+/* タグのサブメニュー（レイアウト・タグモード）。targets＝対象のノード・矢印の配列 */
+function tagToast(n, tag, verb) { toast(n ? `タグ「${tag}」を${n}件${verb}しました` : (verb === '追加' ? `タグ「${tag}」は設定済みです` : 'そのタグは設定されていません')); }
+function askTag(targets) {
+  const t = prompt('タグ名（カンマ区切りで複数）', '');
+  if (t === null) return;
+  const tags = cleanTags(t.split(/[,，、]/));
+  if (!tags.length) return;
+  const n = addTags(targets, tags);
+  toast(n ? `タグ「${tags.join('」「')}」を追加しました` : 'すでに設定済みです');
+}
+function tagAddMenu(x, y, targets) {
+  const tags = allTags();
+  showPopup(x, y, [
+    { label: '✏️ 任意のタグ', fn: () => askTag(targets) },
+    ...(tags.length ? tags.map(t => ({ label: '🏷 ' + t, fn: () => tagToast(addTags(targets, [t]), t, '追加') }))
+      : [{ label: '（設定済みのタグはありません）', disabled: true, fn: () => {} }])
+  ]);
+}
+function tagDelMenu(x, y, targets) {         // 選択範囲に設定されているタグのリスト
+  const m = new Map();
+  targets.forEach(o => (o.tags || []).forEach(t => m.set(t, (m.get(t) || 0) + 1)));
+  const tags = [...m.keys()].sort((a, b) => natCmp(a, b));
+  showPopup(x, y, tags.length ? tags.map(t => ({ label: `🏷 ${t}（${m.get(t)}）`, fn: () => tagToast(removeTag(targets, t), t, '削除') }))
+    : [{ label: '（設定済みのタグはありません）', disabled: true, fn: () => {} }]);
+}
 /* ---------- コピー／切り取り／貼り付け ---------- */
 let clip = null, lastPaste = null, lastPt = null;   // clip＝アプリ内クリップボード
 function selParts() {                        // 選択中のノード・未リンクの矢印・（単独で選んだ）リンク済みの矢印
@@ -960,11 +1080,11 @@ function copySel(quiet) {
   if (single && !single.video) { toast('動画のない矢印はコピーできません'); return false; }
   const ids = new Set(ns.map(n => n.id));
   const c = { nodes: [], arrows: [] };
-  ns.forEach(n => c.nodes.push({ id: n.id, name: n.name, x: n.x, y: n.y, image: n.image, imageHash: n.imageHash || null, pw: n.pw, ph: n.ph }));
+  ns.forEach(n => c.nodes.push({ id: n.id, name: n.name, x: n.x, y: n.y, image: n.image, imageHash: n.imageHash || null, pw: n.pw, ph: n.ph, tags: (n.tags || []).slice() }));
   arrows.forEach(a => {                      // 選択ノード同士をつなぐ矢印は一緒にコピー
-    if (ids.has(a.from) && ids.has(a.to)) c.arrows.push({ from: a.from, to: a.to, ux: null, uy: null, video: a.video, videoHash: a.videoHash || null, vw: a.vw, vh: a.vh });
+    if (ids.has(a.from) && ids.has(a.to)) c.arrows.push({ from: a.from, to: a.to, ux: null, uy: null, video: a.video, videoHash: a.videoHash || null, vw: a.vw, vh: a.vh, tags: (a.tags || []).slice() });
   });
-  const freeCopy = (a, x, y) => c.arrows.push({ from: null, to: null, ux: x, uy: y, video: a.video, videoHash: a.videoHash || null, vw: a.vw, vh: a.vh });
+  const freeCopy = (a, x, y) => c.arrows.push({ from: null, to: null, ux: x, uy: y, video: a.video, videoHash: a.videoHash || null, vw: a.vw, vh: a.vh, tags: (a.tags || []).slice() });
   fa.forEach(a => freeCopy(a, a.ux, a.uy));
   if (single) { const g = geom(single); freeCopy(single, g.vc.x, g.vc.y); }   // リンク済みの矢印は未リンクの矢印として貼り付け
   const pts = [...c.nodes.map(n => [n.x, n.y]), ...c.arrows.filter(a => !a.from).map(a => [a.ux, a.uy])];
@@ -992,12 +1112,12 @@ function pasteClip(p) {
   if (lastPaste && Math.hypot(lastPaste.x - p.x, lastPaste.y - p.y) < 1) { lastPaste.n++; P = { x: p.x + 30 * lastPaste.n, y: p.y + 30 * lastPaste.n }; }
   else lastPaste = { x: p.x, y: p.y, n: 0 };
   const dx = P.x - clip.cx, dy = P.y - clip.cy, map = new Map();
-  const nn = clip.nodes.map(n => { const id = uid(); map.set(n.id, id); return { ...n, id, x: n.x + dx, y: n.y + dy }; });
+  const nn = clip.nodes.map(n => { const id = uid(); map.set(n.id, id); return { ...n, id, x: n.x + dx, y: n.y + dy, tags: (n.tags || []).slice() }; });
   const na = clip.arrows.map(a => {
     const free = !a.from;
     return { id: uid(), from: free ? null : map.get(a.from), to: free ? null : map.get(a.to),
       ux: free ? a.ux + dx : null, uy: free ? a.uy + dy : null,
-      video: a.video, videoHash: a.videoHash, vw: a.vw, vh: a.vh, rt: 'idle' };
+      video: a.video, videoHash: a.videoHash, vw: a.vw, vh: a.vh, tags: (a.tags || []).slice(), rt: 'idle' };
   });
   nodes.push(...nn); arrows.push(...na);
   if (mode !== 'layout') setMode('layout');  // 貼り付けたものをすぐ移動できるようレイアウトモードへ
@@ -1091,7 +1211,10 @@ function onLong(g) {
     (hit && ((hit.type === 'node' && sel.nodes.includes(hit.id)) || (hit.type === 'arrow' && sel.garrows.includes(hit.id)))));
   if (inGrp) {
     if (navigator.vibrate) navigator.vibrate(15);
+    const { ns, fa } = selParts(), tg = [...ns, ...fa];
     showPopup(g.sx, g.sy, [
+      { label: '🏷 タグを追加', disabled: !tg.length, fn: () => tagAddMenu(g.sx, g.sy, tg) },
+      { label: '🏷 タグを一括削除', disabled: !tg.some(o => o.tags && o.tags.length), fn: () => tagDelMenu(g.sx, g.sy, tg) },
       { label: '📋 コピー (Ctrl+C)', fn: () => copySel() },
       { label: '✂️ 切り取り (Ctrl+X)', fn: cutSel },
       { label: '🗑 削除', fn: deleteSelection }
@@ -1125,6 +1248,7 @@ function onLong(g) {
       { label: '⏭ 直後の動画の先頭フレームから生成', disabled: !nexts.length, fn: () => genFrame(o, nexts, 'first', g.sx, g.sy) },
       { label: 'ファイル解除', disabled: !o.image, fn: () => { o.image = null; o.imageHash = null; save(); draw(); } },
       { label: '✏️ 名前を変更', fn: () => { const t = prompt('ノード名', o.name); if (t !== null) { o.name = t.trim() || o.name; save(); draw(); } } },
+      ...(mode === 'layout' ? [{ label: '🏷 タグを追加', fn: () => tagAddMenu(g.sx, g.sy, [o]) }] : []),
       { label: '📋 コピー (Ctrl+C)', fn: () => copySel() },
       { label: '✂️ 切り取り (Ctrl+X)', fn: cutSel },
       { label: '🗑 ノードを削除', fn: () => deleteNode(o) }
@@ -1140,6 +1264,7 @@ function onLong(g) {
           } else { o.video = null; o.videoHash = null; o.rt = 'idle'; }
           save(); draw();
         } },
+      ...(mode === 'layout' ? [{ label: '🏷 タグを追加', fn: () => tagAddMenu(g.sx, g.sy, [o]) }] : []),
       { label: '📋 コピー (Ctrl+C)', disabled: !o.video, fn: () => copySel() },
       { label: '✂️ 切り取り (Ctrl+X)', disabled: !o.video, fn: cutSel },
       { label: '🗑 矢印を削除', fn: () => { arrows = arrows.filter(a => a !== o); clearSel(); updateConnUI(); save(); draw(); } }
@@ -1213,6 +1338,8 @@ function togglePlay(a) {
   draw();
 }
 function onTap(g) {
+  const tx = hitTagX(g.w.x, g.w.y);          // タグの「×」をタップ：そのタグを削除
+  if (tx) { removeTag([tx.o], tx.tag); toast(`タグ「${tx.tag}」を削除しました`); return; }
   const hit = g.hit;
   if (hit && hit.type === 'node') selectNode(hit.id);
   else if (hit && hit.type === 'arrow') {
@@ -1365,9 +1492,9 @@ cv.addEventListener('pointermove', e => {
 function applyBand(b) {                      // 範囲内のノードと未リンクの矢印を選択
   const p = toWorld(Math.min(b.x0, b.x1), Math.min(b.y0, b.y1)), q = toWorld(Math.max(b.x0, b.x1), Math.max(b.y0, b.y1));
   const hit = (x0, y0, x1, y1) => x0 <= q.x && x1 >= p.x && y0 <= q.y && y1 >= p.y;
-  sel.nodes = nodes.filter(n => { const bx = box(n); return hit(n.x - bx.w / 2, n.y - bx.h / 2, n.x + bx.w / 2, n.y + bx.h / 2 + (n.image ? 22 : 0)); }).map(n => n.id);
+  sel.nodes = nodes.filter(n => { const bx = box(n); return hit(n.x - bx.w / 2, n.y - bx.h / 2, n.x + bx.w / 2, n.y + bx.h / 2 + nodeExtra(n)); }).map(n => n.id);
   sel.arrow = null;
-  sel.garrows = arrows.filter(a => isFree(a) && a.video && hit(a.ux - a.vw / 2, a.uy - a.vh / 2, a.ux + a.vw / 2, a.uy + a.vh / 2 + 46)).map(a => a.id);
+  sel.garrows = arrows.filter(a => isFree(a) && a.video && hit(a.ux - a.vw / 2, a.uy - a.vh / 2, a.ux + a.vw / 2, a.uy + a.vh / 2 + arrowExtra(a))).map(a => a.id);
   sel.grp = sel.nodes.length + sel.garrows.length > 0;
   updateConnUI(); draw();
   if (sel.nodes.length + sel.garrows.length) toast(`ノード ${sel.nodes.length} 件・未リンクの矢印 ${sel.garrows.length} 本を選択`);
@@ -1395,7 +1522,15 @@ function pointerEnd(e) {
 }
 cv.addEventListener('pointerup', pointerEnd);
 cv.addEventListener('pointercancel', pointerEnd);
-cv.addEventListener('contextmenu', e => e.preventDefault());
+let lastPtrType = 'mouse';
+cv.addEventListener('contextmenu', e => {    // マウスの右クリック：長押しせずにすぐサブメニューを表示（タッチの長押しは従来のタイマーで処理）
+  e.preventDefault();
+  if (lastPtrType !== 'mouse') return;
+  if (g) { clearTimeout(g.timer); g.long = true; }
+  const w = toWorld(e.clientX, e.clientY);
+  onLong({ hit: hitTest(w.x, w.y), w, sx: e.clientX, sy: e.clientY });
+});
+cv.addEventListener('pointerdown', e => { lastPtrType = e.pointerType; });
 cv.addEventListener('pointermove', e => { lastPt = { x: e.clientX, y: e.clientY }; });
 cv.addEventListener('pointerdown', e => { lastPt = { x: e.clientX, y: e.clientY }; });
 document.addEventListener('gesturestart', e => e.preventDefault());
@@ -1419,7 +1554,8 @@ function serialize() {
       imageFile: n.image || null,
       imageHash: n.image ? (mediaHash.get(n.image) || n.imageHash || null) : null,
       previewW: n.image ? Math.round(n.pw * 10) / 10 : null,
-      previewH: n.image ? Math.round(n.ph * 10) / 10 : null
+      previewH: n.image ? Math.round(n.ph * 10) / 10 : null,
+      ...(n.tags && n.tags.length ? { tags: n.tags.slice() } : {})
     })),
     arrows: arrows.map(a => {
       const gm = geom(a), f = nodeById(a.from), t = nodeById(a.to);
@@ -1431,7 +1567,8 @@ function serialize() {
         videoFile: a.video || null,
         videoHash: a.video ? (mediaHash.get(a.video) || a.videoHash || null) : null,
         previewW: a.video ? Math.round(a.vw * 10) / 10 : null,
-        previewH: a.video ? Math.round(a.vh * 10) / 10 : null
+        previewH: a.video ? Math.round(a.vh * 10) / 10 : null,
+        ...(a.tags && a.tags.length ? { tags: a.tags.slice() } : {})
       };
     })
   };
@@ -1444,7 +1581,8 @@ function deserialize(o) {
     return {
       id: String(n.id ?? uid()), name: String(n.name ?? ''), x: +n.x || 0, y: +n.y || 0,
       image: img, imageHash: img ? (n.imageHash || null) : null,
-      pw: img ? (+n.previewW || 160) : null, ph: img ? (+n.previewH || 120) : null
+      pw: img ? (+n.previewW || 160) : null, ph: img ? (+n.previewH || 120) : null,
+      tags: cleanTags(n.tags)
     };
   });
   const ids = new Set(nodes.map(n => n.id));
@@ -1458,7 +1596,8 @@ function deserialize(o) {
       id: String(a.id ?? uid()), from: free ? null : String(a.from), to: free ? null : String(a.to),
       ux: free ? (+a.x || 0) : null, uy: free ? (+a.y || 0) : null,
       video: v, videoHash: v ? (a.videoHash || null) : null,
-      vw: v ? (+a.previewW || 200) : null, vh: v ? (+a.previewH || 113) : null
+      vw: v ? (+a.previewW || 200) : null, vh: v ? (+a.previewH || 113) : null,
+      tags: cleanTags(a.tags)
     };
   });
   clearSel(); updateConnUI();
@@ -1497,15 +1636,50 @@ const isImageFile = f => (f.type || '').startsWith('image/') || /\.(png|jpe?g|gi
 const isVideoFile = f => (f.type || '').startsWith('video/') || /\.(mp4|m4v|mov|webm|mkv|avi|ogv|3gp)$/i.test(f.name);
 function freeOrigin() {                      // 新規アイテムを並べ始める位置（既存の内容の下）
   let minX = Infinity, maxY = -Infinity;
-  nodes.forEach(n => { const b = box(n); minX = Math.min(minX, n.x - b.w / 2); maxY = Math.max(maxY, n.y + b.h / 2 + 30); });
+  nodes.forEach(n => { const b = box(n); minX = Math.min(minX, n.x - b.w / 2); maxY = Math.max(maxY, n.y + b.h / 2 + 30 + tagH(n)); });
   arrows.forEach(a => {
     const gm = a.video && geom(a); if (!gm) return;
-    minX = Math.min(minX, gm.vc.x - a.vw / 2); maxY = Math.max(maxY, gm.vc.y + a.vh / 2 + 50);
+    minX = Math.min(minX, gm.vc.x - a.vw / 2); maxY = Math.max(maxY, gm.vc.y + a.vh / 2 + 50 + tagH(a));
   });
   if (!isFinite(minX)) { const p = toWorld(80, 120); return { x: p.x, y: p.y }; }
   return { x: minX, y: maxY + 40 };
 }
 const GRID = { cols: 5, dx: 260, dy: 250 };
+/* 同名で内容（ハッシュ）が異なるファイルは別のファイルとして扱い、あとのものに連番（_2, _3…）を付けて両方保持する */
+const serialName = (n, taken) => {
+  const m = n.replace(/\.[^.]+$/, ''), e = n.slice(m.length);
+  let i = 2; while (taken.has(m + '_' + i + e)) i++;
+  return m + '_' + i + e;
+};
+async function planRelink(files) {           // 戻り値：{ plan:[{file,name,h,same}], renamed:連番を付けた件数 }
+  if (hashJobs.size) await Promise.all([...hashJobs.values()]);
+  const hs = await Promise.all(files.map(f => fileHash(f).catch(() => null)));
+  const refHash = name => {                  // JSONが記録している、そのファイル名のハッシュ
+    const n = nodes.find(x => x.image === name), a = arrows.find(x => x.video === name);
+    return (n && n.imageHash) || (a && a.videoHash) || null;
+  };
+  const taken = new Set(media.keys());       // 連番の名前が衝突しないよう、使用中・参照中・今回選んだ名前を除外
+  files.forEach(f => taken.add(f.name));
+  nodes.forEach(n => { if (n.image) taken.add(n.image); });
+  arrows.forEach(a => { if (a.video) taken.add(a.video); });
+  const groups = new Map();
+  files.forEach((f, i) => { if (!groups.has(f.name)) groups.set(f.name, []); groups.get(f.name).push({ f, h: hs[i] }); });
+  const plan = []; let renamed = 0;
+  for (const [name, list] of groups) {
+    const vars = [];                         // 内容の異なる候補（同じ内容は1つにまとめる。ハッシュ不明なものは同名を同一視）
+    list.forEach(v => { const k = vars.findIndex(x => !x.h || !v.h || x.h === v.h); if (k >= 0) vars[k] = v; else vars.push(v); });
+    const loaded = media.has(name), cur = loaded ? (mediaHash.get(name) || null) : null;
+    let keep;                                // 元の名前のまま使う候補
+    if (loaded) keep = vars.findIndex(v => !cur || !v.h || v.h === cur);   // 読み込み済みと同じ内容のもの
+    else { const rh = refHash(name); keep = Math.max(0, vars.findIndex(v => rh && v.h === rh)); }
+    vars.forEach((v, k) => {
+      if (k === keep) { plan.push({ file: v.f, name, h: v.h, same: !!(loaded && cur && v.h === cur) }); return; }
+      const nn = serialName(name, taken); taken.add(nn); renamed++;
+      plan.push({ file: new File([v.f], nn, { type: v.f.type, lastModified: v.f.lastModified }), name: nn, h: v.h, same: false });
+    });
+  }
+  return { plan, renamed };
+}
 let relinking = false;
 async function relinkFiles(files) {
   if (!files.length) return;
@@ -1514,17 +1688,17 @@ async function relinkFiles(files) {
   try { await relinkRun(files); } finally { relinking = false; }
 }
 async function relinkRun(files) {
-  files.forEach(f => registerFile(f));
-  draw();
   toast('ファイルを照合中…');
-  await Promise.all(files.map(f => hashJobs.get(f.name)));
+  const { plan, renamed: serialN } = await planRelink(files);
+  plan.forEach(p => { if (!p.same) registerFile(p.file, p.h); });   // 読み込み済みと同一内容のものは登録し直さない
+  draw();
   const rn = relinkRefs();                   // 名前が見つからないものはハッシュ一致で付け替え
 
   // ファイル名でもハッシュでもJSONの内容に該当しなかったファイルを新規として追加
   const used = new Set();
   nodes.forEach(n => { if (n.image) used.add(n.image); });
   arrows.forEach(a => { if (a.video) used.add(a.video); });
-  const fresh = files.filter(f => !used.has(f.name));
+  const fresh = plan.map(p => p.file).filter(f => !used.has(f.name));
   const newImgs = fresh.filter(isImageFile), newVids = fresh.filter(f => !isImageFile(f) && isVideoFile(f));
   const placed = [];
   let framed = 0, badVids = 0;               // フレームを自動生成できた動画の数／読み込めなかった動画の数
@@ -1569,6 +1743,7 @@ async function relinkRun(files) {
   const m = missingMedia();
   const parts = [m ? `リンク完了（未リンク ${m} 件）` : 'すべてのメディアをリンクしました'];
   if (rn) parts.push(`ハッシュ一致でファイル名を更新：${rn} 件`);
+  if (serialN) parts.push(`同名で内容が異なるファイル ${serialN} 件に連番を付けて別々に保持`);
   if (newImgs.length) parts.push(`新規ノード ${newImgs.length} 件を追加`);
   const addedVids = newVids.length - badVids;
   if (addedVids) parts.push(framed === addedVids
@@ -1711,7 +1886,37 @@ function resetAll() {
 /* ノードを「名前順」または「画像の類似順」に並べたうえで、ノード・動画プレビューが重ならない間隔の格子に置き、
    ノード同士の入れ替え（焼きなまし法）で矢印の交差をできるだけ減らす */
 const natCmp = (a, b) => a.localeCompare(b, 'ja', { numeric: true, sensitivity: 'base' });
-const sortedByName = () => [...nodes].sort((a, b) => natCmp(a.name || '', b.name || '') || natCmp(a.image || '', b.image || ''));
+const byName = (a, b) => natCmp(a.name || '', b.name || '') || natCmp(a.image || '', b.image || '');
+/* タグの類似度（Jaccard：共通タグ数÷全タグ数）が高いノードが隣り合う順に並べる。タグのないノードは最後に名前順 */
+function sortedByTag() {
+  const tagged = nodes.filter(n => n.tags && n.tags.length).sort(byName);   // 同じタグ構成のものは名前順のまま
+  const none = nodes.filter(n => !(n.tags && n.tags.length)).sort(byName);
+  const M = tagged.length;
+  if (M < 3) return [...tagged, ...none];
+  const sets = tagged.map(n => new Set(n.tags));
+  const D = Array.from({ length: M }, () => new Float32Array(M));
+  for (let i = 0; i < M; i++) for (let j = i + 1; j < M; j++) {
+    let c = 0; sets[i].forEach(t => { if (sets[j].has(t)) c++; });
+    D[i][j] = D[j][i] = 1 - c / (sets[i].size + sets[j].size - c);
+  }
+  let start = 0, bestSum = -1;               // 他と最も違うものを端にする
+  for (let i = 0; i < M; i++) { let s = 0; for (let j = 0; j < M; j++) s += D[i][j]; if (s > bestSum + 1e-9) { bestSum = s; start = i; } }
+  const used = new Uint8Array(M), path = [start]; used[start] = 1;
+  while (path.length < M) {                  // 最も近いものを順にたどる
+    const last = path[path.length - 1]; let bj = -1, bd = Infinity;
+    for (let j = 0; j < M; j++) if (!used[j] && D[last][j] < bd - 1e-9) { bd = D[last][j]; bj = j; }
+    used[bj] = 1; path.push(bj);
+  }
+  for (let improved = true, guard = 0; improved && guard < 50; guard++) {   // 2-opt で全体の距離を縮める
+    improved = false;
+    for (let i = 0; i < M - 1; i++) for (let j = i + 1; j < M; j++) {
+      const a = i > 0 ? D[path[i - 1]][path[i]] : 0, b = j < M - 1 ? D[path[j]][path[j + 1]] : 0;
+      const a2 = i > 0 ? D[path[i - 1]][path[j]] : 0, b2 = j < M - 1 ? D[path[i]][path[j + 1]] : 0;
+      if (a2 + b2 < a + b - 1e-6) { path.splice(i, j - i + 1, ...path.slice(i, j + 1).reverse()); improved = true; }
+    }
+  }
+  return [...path.map(i => tagged[i]), ...none];
+}
 let arranging = false;
 
 function loadImgEl(name) {
@@ -1725,7 +1930,7 @@ function loadImgEl(name) {
   });
 }
 async function sortedBySimilarity() {        // 画像を小さな縮小画像にして比べ、似たものが隣り合う順に並べる
-  const FS = 20, c = document.createElement('canvas'); c.width = c.height = FS;
+  const FS = 24, c = document.createElement('canvas'); c.width = c.height = FS;
   const x = c.getContext('2d', { willReadFrequently: true });
   const feats = [], none = [];
   for (const n of nodes) {
@@ -1734,11 +1939,19 @@ async function sortedBySimilarity() {        // 画像を小さな縮小画像�
     x.fillStyle = '#000'; x.fillRect(0, 0, FS, FS);
     const r = Math.min(FS / el.naturalWidth, FS / el.naturalHeight), dw = el.naturalWidth * r, dh = el.naturalHeight * r;
     x.drawImage(el, (FS - dw) / 2, (FS - dh) / 2, dw, dh);
-    const d = x.getImageData(0, 0, FS, FS).data, v = new Float32Array(FS * FS * 3);
-    for (let i = 0, k = 0; i < d.length; i += 4) { v[k++] = d[i] / 255; v[k++] = d[i + 1] / 255; v[k++] = d[i + 2] / 255; }
+    const d = x.getImageData(0, 0, FS, FS).data, v = new Float32Array(FS * FS * 4), gr = new Float32Array(FS * FS);
+    for (let i = 0, k = 0, q = 0; i < d.length; i += 4, q++) {
+      const R = d[i] / 255, G = d[i + 1] / 255, B = d[i + 2] / 255;
+      v[k++] = R; v[k++] = G; v[k++] = B; gr[q] = .3 * R + .59 * G + .11 * B;
+    }
+    let k2 = FS * FS * 3;                    // 色に加えて輪郭（明暗の変化）も比べ、ポーズの違いを拾いやすくする
+    for (let yy = 0; yy < FS; yy++) for (let xx = 0; xx < FS; xx++) {
+      const q = yy * FS + xx, gx = xx < FS - 1 ? gr[q + 1] - gr[q] : 0, gy = yy < FS - 1 ? gr[q + FS] - gr[q] : 0;
+      v[k2++] = Math.min(1, (Math.abs(gx) + Math.abs(gy)) * 2);
+    }
     feats.push({ n, v });
   }
-  none.sort((a, b) => natCmp(a.name || '', b.name || ''));      // 画像のないノードは最後に名前順
+  none.sort(byName);                          // 画像のないノードは最後に名前順
   const M = feats.length;
   if (M < 3) return [...feats.map(f => f.n), ...none];
   const D = Array.from({ length: M }, () => new Float32Array(M));
@@ -1766,22 +1979,23 @@ async function sortedBySimilarity() {        // 画像を小さな縮小画像�
   return [...path.map(i => feats[i].n), ...none];
 }
 
-function layoutNodes(order) {
+function layoutNodes(order, simFirst) {   // simFirst：並びの基準（画像の類似度）を矢印の交差などより優先する
   const N = order.length, idx = new Map(order.map((n, i) => [n.id, i]));
-  const nw = order.map(n => box(n).w), nh = order.map(n => box(n).h + (n.image ? 22 : 0));
+  const nw = order.map(n => box(n).w), nh = order.map(n => box(n).h + nodeExtra(n));
   const edges = [];
   arrows.forEach(a => {
     if (isFree(a)) return;
     const f = idx.get(a.from), t = idx.get(a.to);
     if (f == null || t == null || f === t) return;
-    edges.push({ f, t, both: arrows.some(x => x.from === a.to && x.to === a.from), vid: !!a.video, vw: a.vw || 0, vh: a.vh || 0 });
+    edges.push({ f, t, both: arrows.some(x => x.from === a.to && x.to === a.from), vid: !!a.video, vw: a.vw || 0, vh: a.vh || 0, th: a.video ? tagH(a) : 0 });
   });
   const EN = edges.length, inc = order.map(() => []);
   edges.forEach((e, i) => { inc[e.f].push(i); inc[e.t].push(i); });
   const maxNW = Math.max(...nw), maxNH = Math.max(...nh);
   const pv = edges.filter(e => e.vid);
-  const maxPW = pv.length ? Math.max(...pv.map(e => e.vw)) : 0, maxPH = pv.length ? Math.max(...pv.map(e => e.vh + 50)) : 0;
-  const W_X = 100, W_T = 60, W_O = 400, W_L = 3, W_R = 4;   // 交差／ノード貫通／重なり／矢印の長さ／並び順からのずれ
+  const maxPW = pv.length ? Math.max(...pv.map(e => e.vw)) : 0, maxPH = pv.length ? Math.max(...pv.map(e => e.vh + 50 + e.th)) : 0;
+  const W_O = 400;
+  const [W_X, W_T, W_L, W_R, W_D] = simFirst ? [30, 20, 1, 40, 5] : [100, 60, 3, 4, 40];   // 交差／ノード貫通／重なり／矢印の長さ／並び順からのずれ／矢印の向き（右向きが最小）
 
   const px = new Float64Array(N), py = new Float64Array(N), slotOf = new Int32Array(N);
   const dflag = new Uint8Array(N), stamp = new Int32Array(EN); let stampId = 0;
@@ -1797,7 +2011,7 @@ function layoutNodes(order) {
       const ex = (Math.abs(nx) * E.vw + Math.abs(ny) * E.vh) / 2 + 4;
       cx += nx * ex; cy += ny * ex;
     }
-    o[0] = cx - E.vw / 2 - 4; o[1] = cy - E.vh / 2 - 4; o[2] = cx + E.vw / 2 + 4; o[3] = cy + E.vh / 2 + 46;
+    o[0] = cx - E.vw / 2 - 4; o[1] = cy - E.vh / 2 - 4; o[2] = cx + E.vw / 2 + 4; o[3] = cy + E.vh / 2 + 46 + E.th;
   };
   const hit = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
   const segX = (ax, ay, bx, by, cx, cy, dx, dy) => {
@@ -1823,9 +2037,13 @@ function layoutNodes(order) {
     stampId++;
     const AE = [];
     for (const d of dn) { dflag[d] = 1; for (const e of inc[d]) if (stamp[e] !== stampId) { stamp[e] = stampId; AE.push(e); } }
-    let cross = 0, thru = 0, over = 0, len = 0, rank = 0;
+    let cross = 0, thru = 0, over = 0, len = 0, rank = 0, dir = 0, back = 0;
     for (const e of AE) {
       const E1 = edges[e], x1 = px[E1.f], y1 = py[E1.f], x2 = px[E1.t], y2 = py[E1.t];
+      if (!E1.both) {                        // 矢印の向き：右向き＝0、縦向き＝0.5、左向き＝1（往復の2本は合計が一定なので対象外）
+        const ddx = x2 - x1, ddy = y2 - y1, dl = Math.hypot(ddx, ddy);
+        if (dl > 0) { dir += (1 - ddx / dl) / 2; if (ddx < -1e-6) back++; }
+      }
       for (let e2 = 0; e2 < EN; e2++) {
         if (e2 === e || (stamp[e2] === stampId && e2 < e)) continue;
         const E2 = edges[e2];
@@ -1857,9 +2075,9 @@ function layoutNodes(order) {
       }
     }
     for (const d of dn) dflag[d] = 0;
-    return { cross, thru, over, len, rank };
+    return { cross, thru, over, len, rank, dir, back };
   }
-  const cost = r => r.cross * W_X + r.thru * W_T + r.over * W_O + r.len * W_L + r.rank * W_R;
+  const cost = r => r.cross * W_X + r.thru * W_T + r.over * W_O + r.len * W_L + r.rank * W_R + r.dir * W_D;
   const place = (i, s) => { slotOf[i] = s; px[i] = (s % cols) * cw; py[i] = ((s / cols) | 0) * ch; };
   const all = order.map((_, i) => i);
 
@@ -1929,10 +2147,10 @@ function layoutNodes(order) {
 function contentBox(skipFree) {              // ノードと動画プレビューを囲む範囲
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   const add = (ax, ay, bx, by) => { x0 = Math.min(x0, ax); y0 = Math.min(y0, ay); x1 = Math.max(x1, bx); y1 = Math.max(y1, by); };
-  nodes.forEach(n => { const b = box(n); add(n.x - b.w / 2, n.y - b.h / 2, n.x + b.w / 2, n.y + b.h / 2 + (n.image ? 22 : 0)); });
+  nodes.forEach(n => { const b = box(n); add(n.x - b.w / 2, n.y - b.h / 2, n.x + b.w / 2, n.y + b.h / 2 + nodeExtra(n)); });
   arrows.forEach(a => {
     if (!a.video || (skipFree && isFree(a))) return;
-    const g = geom(a); if (g) add(g.vc.x - a.vw / 2, g.vc.y - a.vh / 2, g.vc.x + a.vw / 2, g.vc.y + a.vh / 2 + 46);
+    const g = geom(a); if (g) add(g.vc.x - a.vw / 2, g.vc.y - a.vh / 2, g.vc.x + a.vw / 2, g.vc.y + a.vh / 2 + arrowExtra(a));
   });
   return isFinite(x0) ? { x0, y0, x1, y1 } : null;
 }
@@ -1945,7 +2163,7 @@ function placeFreeArrows() {                 // 未リンクの矢印は、ノ�
   for (const a of fr) {
     if (cx > bb.x0 && cx + a.vw > bb.x0 + maxW) { cx = bb.x0; top += rowH + 30; rowH = 0; }
     a.ux = cx + a.vw / 2; a.uy = top + a.vh / 2;
-    cx += a.vw + 50; rowH = Math.max(rowH, a.vh + 50);
+    cx += a.vw + 50; rowH = Math.max(rowH, a.vh + 50 + tagH(a));
   }
 }
 function fitView() {                         // 全体が画面に収まるように表示を合わせる
@@ -1958,17 +2176,19 @@ async function arrange(kind) {
   if (arranging) return;
   if (!nodes.length && !arrows.some(a => isFree(a) && a.video)) return toast('並べ替えるノードがありません');
   arranging = true; closePopups();
-  toast(kind === 'name' ? '並べ替え中…' : '画像の類似度を計算して並べ替え中…');
+  toast(kind === 'tag' ? 'タグの類似度で並べ替え中…' : '画像の類似度を計算して並べ替え中…');
   try {
     await new Promise(r => setTimeout(r, 30));
     commitHist(); if (lastSnap) lastSnap.view = { ...view };   // アンドゥで表示位置も戻す
-    const order = kind === 'name' ? sortedByName() : await sortedBySimilarity();
-    const st = nodes.length ? layoutNodes(order) : { cross: 0, thru: 0, over: 0 };
+    const order = kind === 'tag' ? sortedByTag() : await sortedBySimilarity();
+    const st = nodes.length ? layoutNodes(order, kind === 'image') : { cross: 0, thru: 0, over: 0, back: 0 };
     placeFreeArrows();
     fitView(); save(); draw();
     const note = [];
     if (st.thru) note.push(`ノードを貫く矢印 ${st.thru} 件`);
     if (st.over) note.push(`重なり ${st.over} 件`);
+    if (st.back) note.push(`左向きの矢印 ${st.back} 件`);
+    if (kind === 'tag' && !nodes.some(n => n.tags && n.tags.length)) note.push('タグ付きのノードがないため名前順');
     toast(`並べ替えました（矢印の交差 ${st.cross} 件${note.length ? '、' + note.join('、') : ''}）`);
   } catch (err) { toast('並べ替えに失敗しました'); }
   finally { arranging = false; }
@@ -1979,14 +2199,14 @@ async function arrange(kind) {
 const HIST_MAX = 50;
 let undoSt = [], redoSt = [], lastSnap = null;
 const stateKey = () => JSON.stringify([
-  nodes.map(n => [n.id, n.name, n.x, n.y, n.image, n.pw, n.ph]),
-  arrows.map(a => [a.id, a.from, a.to, a.ux, a.uy, a.video, a.vw, a.vh])
+  nodes.map(n => [n.id, n.name, n.x, n.y, n.image, n.pw, n.ph, n.tags || []]),
+  arrows.map(a => [a.id, a.from, a.to, a.ux, a.uy, a.video, a.vw, a.vh, a.tags || []])
 ]);
 function takeSnap() {
   return {
     key: stateKey(),
-    nodes: nodes.map(n => ({ ...n })),
-    arrows: arrows.map(a => { const c = { ...a }; delete c.rt; delete c.framing; return c; })
+    nodes: nodes.map(n => ({ ...n, tags: (n.tags || []).slice() })),
+    arrows: arrows.map(a => { const c = { ...a, tags: (a.tags || []).slice() }; delete c.rt; delete c.framing; return c; })
   };
 }
 function commitHist() {
@@ -1999,8 +2219,8 @@ function commitHist() {
 }
 function applySnap(sn) {
   vids.forEach(v => v.el.pause());
-  nodes = sn.nodes.map(n => ({ ...n }));
-  arrows = sn.arrows.map(a => ({ ...a, rt: 'idle' }));
+  nodes = sn.nodes.map(n => ({ ...n, tags: (n.tags || []).slice() }));
+  arrows = sn.arrows.map(a => ({ ...a, tags: (a.tags || []).slice(), rt: 'idle' }));
   if (sn.view) Object.assign(view, sn.view);
   lastSnap = sn;
   clearSel(); updateConnUI(); save(); draw();
