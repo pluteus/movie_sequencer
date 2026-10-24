@@ -2427,7 +2427,7 @@ async function copyText(t, what) {
   toast((what || '説明文') + 'をコピーしました');
 }
 const fileOf = n => (n && (n.image || n.name)) || '';
-const provName = a => { const f = fileOf(nodeById(a.from)), t = fileOf(nodeById(a.to)); return f && t ? f + '_' + t + '.mp4' : ''; };   // 動画が未指定の矢印の仮のファイル名：先頭フレーム名.拡張子_最終フレーム名.拡張子.mp4
+const provName = a => { const f = fileOf(nodeById(a.from)), t = fileOf(nodeById(a.to)); return f && t ? f + '_' + t + '_upscaled_00001-audio.mp4' : ''; };   // 動画が未指定の矢印の仮のファイル名：先頭フレーム名.拡張子_最終フレーム名.拡張子_upscaled_00001-audio.mp4
 function arrowPromptText(a) {                // 1行目：先頭フレームのファイル名、2行目：最終フレームのファイル名、3行目：矢印の説明文（動画プロンプト）
   if (!a || isFree(a)) return null;
   const f = nodeById(a.from), t = nodeById(a.to), fd = nodeDesc(f), td = nodeDesc(t), m = fd && td && descIdx.get(mKey(fd, td));
