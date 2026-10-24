@@ -53,7 +53,9 @@
   .dbox{position:absolute;left:0;top:0;transform-origin:0 0;pointer-events:auto;box-sizing:border-box;background:rgba(27,29,36,.92);
     border:1px solid #ffb84d;border-radius:6px;padding:20px 6px 6px;font:11px/14px sans-serif;color:#e8ecf4;white-space:pre-wrap;
     overflow-wrap:anywhere;-webkit-user-select:text;user-select:text;cursor:text;-webkit-touch-callout:default}
-  .dbox .dcopy{position:absolute;top:2px;right:4px;font:10px sans-serif;padding:1px 8px;border-radius:4px;border:1px solid #ffb84d;
+  .dbox .dhead{position:absolute;top:2px;right:4px;display:flex;gap:4px}
+  .dbox .dname{color:#ffb84d;font-weight:600;margin-bottom:4px;word-break:break-all;-webkit-user-select:text;user-select:text;cursor:text}
+  .dbox .dcopy{font:10px sans-serif;padding:1px 8px;border-radius:4px;border:1px solid #ffb84d;
     background:transparent;color:#ffb84d;cursor:pointer;-webkit-user-select:none;user-select:none}
   .dbox .dtxt{outline:none;min-height:14px}
   .dbox .dtxt:focus{background:rgba(255,184,77,.10);border-radius:3px}
@@ -2412,27 +2414,29 @@ async function lmTagOne(base, model, n, signal, vocab, existing) {
 }
 const strHash = t => { let h = 5381; for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 const descKeyOf = (model, n) => 'desc2|' + model + '|' + strHash(descPrompt()) + '|' + embKey(n);
-const mKey = (a, b) => 'P2:' + strHash(a + '||' + b);   // 矢印の説明文の索引（前後ノードの説明文が変わると別物になる）
+const mKey = (a, b) => 'P3:' + strHash(a + '||' + b);   // 矢印の説明文の索引（前後ノードの説明文が変わると別物になる）
 /* 選択中のノード（最大4つ）のタグ表示の下に、英語の説明文を表示する */
 const DESC_MAX_SEL = 4;
 const descBoxes = new Map();                 // 表示中の説明文ボックス（キー → 要素）。文字は変わったときだけ書き換える（選択範囲を保つため）
 const nodeDesc = n => (n && n.image && media.has(n.image)) ? descIdx.get(embKey(n)) : null;
-async function copyText(t) {
+async function copyText(t, what) {
   try { await navigator.clipboard.writeText(t); }
   catch (_) { const a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select(); try { document.execCommand('copy'); } catch (__) {} a.remove(); }
-  toast('説明文をコピーしました');
+  toast((what || '説明文') + 'をコピーしました');
 }
-function drawDescs() {                       // render の最後に呼ぶ：選択中のノード・矢印の説明文を、キャンバスに合わせて配置する
+function drawDescs() {                       // render の最後に呼ぶ：選択中のノード・矢印のファイル名と説明文を、キャンバスに合わせて配置する
   descLoad();
   const items = [];
   if (sel.nodes.length && sel.nodes.length <= DESC_MAX_SEL) sel.nodes.forEach(id => {
-    const n = nodeById(id), txt = nodeDesc(n); if (!txt) return;
-    const an = tagAnchor(n); items.push({ k: 'n' + id, idx: embKey(n), cx: an.cx, top: an.top + tagH(n) + 4, W: Math.max(box(n).w + 40, 230), txt });
+    const n = nodeById(id); if (!n) return;
+    const an = tagAnchor(n); items.push({ k: 'n' + id, name: n.name || '', idx: embKey(n) || '', cx: an.cx, top: an.top + tagH(n) + 4, W: Math.max(box(n).w + 40, 230), txt: nodeDesc(n) || '' });
   });
-  const a = sel.arrow && arrowById(sel.arrow);   // 矢印：前後のノードの説明文から作った、動画生成用のプロンプト
-  if (a && !isFree(a)) {
-    const fd = nodeDesc(nodeById(a.from)), td = nodeDesc(nodeById(a.to)), txt = fd && td && descIdx.get(mKey(fd, td));
-    const an = txt && tagAnchor(a); if (an) items.push({ k: 'a' + a.id, idx: mKey(fd, td), cx: an.cx, top: an.top + tagH(a) + 4, W: 300, txt });
+  const a = sel.arrow && arrowById(sel.arrow);   // 矢印：ファイル名と、前後のノードの説明文から作った動画生成用のプロンプト
+  const an = a && a.video && tagAnchor(a);
+  if (an) {
+    const fd = !isFree(a) && nodeDesc(nodeById(a.from)), td = !isFree(a) && nodeDesc(nodeById(a.to));
+    const idx = fd && td ? mKey(fd, td) : '';
+    items.push({ k: 'a' + a.id, name: a.video, idx, cx: an.cx, top: an.top + tagH(a) + 4, W: 300, txt: (idx && descIdx.get(idx)) || '' });
   }
   const layer = $('#descLayer'), live = new Set();
   items.forEach(it => {
@@ -2440,17 +2444,24 @@ function drawDescs() {                       // render の最後に呼ぶ：選�
     let el = descBoxes.get(it.k);
     if (!el) {
       el = document.createElement('div'); el.className = 'dbox';
+      const hd = document.createElement('div'); hd.className = 'dhead';
+      const bn = document.createElement('button'); bn.className = 'dcopy'; bn.textContent = '名前コピー';
       const b = document.createElement('button'); b.className = 'dcopy'; b.textContent = 'コピー';
+      hd.append(bn, b);
+      const nm = document.createElement('div'); nm.className = 'dname';
       const t = document.createElement('div'); t.className = 'dtxt'; t.spellcheck = false;
       t.contentEditable = 'plaintext-only'; if (t.contentEditable !== 'plaintext-only') t.contentEditable = 'true';
+      bn.onclick = () => copyText(nm.textContent, 'ファイル名');
       b.onclick = () => copyText(t.innerText.trim());
       t.onblur = () => commitDesc(el, t);                 // 編集は、フォーカスが外れたときに確定して保存する
       t.onkeydown = e => { if (e.key === 'Escape') { t.textContent = el.dataset.txt; t.blur(); } };   // Esc：編集を取り消す
       t.onpaste = e => { e.preventDefault(); document.execCommand('insertText', false, (e.clipboardData || window.clipboardData).getData('text')); };
-      el.append(b, t); layer.appendChild(el); descBoxes.set(it.k, el);
+      el.append(hd, nm, t); layer.appendChild(el); descBoxes.set(it.k, el);
     }
+    const t = el.lastChild, nm = el.children[1], b = el.firstChild.lastChild;
     el.dataset.idx = it.idx;
-    const t = el.lastChild;
+    if (nm.textContent !== it.name) nm.textContent = it.name;
+    t.style.display = b.style.display = it.txt ? '' : 'none';     // 説明文がないときはファイル名だけ表示する
     if (el.dataset.txt !== it.txt && document.activeElement !== t) { el.dataset.txt = it.txt; t.textContent = it.txt; }
     el.style.width = it.W + 'px';
     el.style.transform = `translate(${view.x + (it.cx - it.W / 2) * view.s}px,${view.y + it.top * view.s}px) scale(${view.s})`;
@@ -2532,19 +2543,20 @@ async function lmDescribe(base, model, n, signal) {
 }
 /* 矢印：前後の静止画ノードの説明文の違いから、動画の動きを推測する */
 const MOTION_CAM = '[Static shot]';   // 先頭に付けるカメラ指定（不要なら空文字にする）
-async function lmMotion(base, model, fd, td, signal) {
+async function lmMotion(base, model, fd, td, tags, signal) {
   const p = [
     'Below are pose descriptions of the FIRST frame and the LAST frame of a short clip of one character.',
     'FIRST FRAME:\n' + fd, 'LAST FRAME:\n' + td,
-    'Write a prompt for a first-and-last-frame-to-video model that makes the character move from the first pose to the last pose.',
+    (tags && tags.length ? 'Scene tags (they may hint at the setting; translate them to English if needed): ' + tags.join(', ') + '\n' : '') +
+    'Write a prompt for a first-and-last-frame-to-video model with audio. The character moves from the first pose to the last pose, and the prompt also describes the sound.',
     'Rules:',
-    '- Output ONE English paragraph of 35 to 70 words. No labels, no bullet points, no quotes, no explanation.',
-    (MOTION_CAM ? '- Start with the tag ' + MOTION_CAM + ', then continue in the same paragraph.\n' : '') + '- Use present tense and describe the movement in chronological order: what moves first, what follows, with smooth natural motion verbs and gentle pacing words (slowly, smoothly, gradually).',
-    '- Finish with the character settling into the pose of the last frame.',
+    '- Output ONE English paragraph of 55 to 95 words. No labels except the "Sound:" part below, no bullet points, no quotes, no explanation.',
+    (MOTION_CAM ? '- Start with the tag ' + MOTION_CAM + ', then continue in the same paragraph.\n' : '') + '- First describe the movement in present tense and chronological order: what moves first, what follows, with smooth natural motion verbs and gentle pacing words (slowly, smoothly, gradually). Finish the movement with the character settling into the pose of the last frame.',
     '- Describe only the character\'s own movement: body, head, gaze, expression, arms, hands, legs. Do not mention "first frame", "last frame", "image" or "description". Do not describe the background, clothing, colors or art style. Do not invent objects or props. No camera movement.',
+    '- Then add one sentence that starts with "Sound:". List the sound effects that this movement would make, in the order they happen (for example fabric rustling, soft footsteps, a hand brushing hair, light breathing, a small impact), then end with one ambient sound that fits the setting (use the scene tags when they help; otherwise a quiet indoor room tone). Only include sounds that the movement would physically cause. No music, no speech, no singing.',
     ...vocabLines()
   ];
-  const t = await lmChatText(base, model, 'You write concise, vivid motion prompts for a first-and-last-frame-to-video generator (MiniMax Hailuo style).', p.join('\n'), signal, 400);
+  const t = await lmChatText(base, model, 'You write concise, vivid motion-and-sound prompts for a first-and-last-frame-to-video generator with audio (MiniMax Hailuo style).', p.join('\n'), signal, 500);
   return t.replace(/\s*\n\s*/g, ' ').replace(/^["'“”]+|["'“”]+$/g, '').trim();
 }
 async function lmEmbModelId(base, signal) {    // 埋め込みモデルのIDが空なら、/models から埋め込み用らしきものを選ぶ
@@ -2611,7 +2623,7 @@ async function descArrowLM(a) {              // 矢印：前後のノードの�
     };
     const fd = await get(f), td = await get(t);
     toast(`動きを推測中…（${model}）`);
-    const m = await lmMotion(base, model, fd, td);
+    const m = await lmMotion(base, model, fd, td, [...new Set([...(f.tags || []), ...(t.tags || []), ...(a.tags || [])])].slice(0, 12));
     descPut('desc2|' + model + '|' + strHash(descPrompt()) + '|' + mKey(fd, td), mKey(fd, td), m); descSave();
     draw(); toast('説明文を追加しました（矢印を選択すると表示されます）');
   } catch (e) { toast(e.message); } finally { lmBusy = false; }
