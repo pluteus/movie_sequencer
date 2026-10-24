@@ -2526,6 +2526,7 @@ function descPrompt() {
     'Describe the character in this image, in English, using exactly the following fields (one line per field, in this order, short phrases, no extra text):',
     ...descFields(),
     ...vocabLines(),
+    ...(descFields().some(l => /[(/,]\s*empty\s*[/,)]/i.test(l)) ? ['When a field lists "empty" as a choice, write "empty" for that field if none of its other choices applies.'] : []),
     'Unless a field above asks for it, ignore the background, clothing design, colors and art style. Use the same wording for the same pose across images.'
   ].join('\n');
 }
@@ -2637,14 +2638,15 @@ function descFieldValue(text, name) {
 }
 function descPickOpt(val, opts) {            // 値の中で最初に現れる選択肢（同じ位置なら長いほう）の番号。なければ -1
   const v = dNorm(val), vc = v.replace(/ /g, ''); let best = -1, bp = Infinity, bl = 0;
+  const emp = opts.findIndex(op => dNorm(op) === 'empty');   // 「empty」は特別な選択肢：ほかのどれにも当てはまらないときに選ばれる（並びの位置の優先度で扱う）
   opts.forEach((op, i) => {
-    const o = dNorm(op); if (!o) return;
+    const o = dNorm(op); if (!o || i === emp) return;
     const m = new RegExp('(^|[^a-z0-9])' + o.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![a-z0-9])').exec(v);
     let pos = m ? m.index + m[1].length : -1;
     if (pos < 0) { const k = o.replace(/ /g, ''); if (k.length >= 3 && (pos = vc.indexOf(k)) >= 0) pos += 1000; }   // 「full body」と「fullbody」などの表記ゆれ
     if (pos >= 0 && (pos < bp || (pos === bp && o.length > bl))) { best = i; bp = pos; bl = o.length; }
   });
-  return best;
+  return best >= 0 ? best : emp;
 }
 let descSortKeys = null, descSortDepth = 0;
 async function sortedByDescFields() {
