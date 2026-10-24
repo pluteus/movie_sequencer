@@ -36,6 +36,7 @@
   #dlg[hidden]{display:none}
   #setDlg{position:fixed;inset:0;z-index:70;background:#0008;display:flex;align-items:center;justify-content:center}
   #setDlg[hidden]{display:none}
+  #setDlg .card{max-height:calc(100vh - 24px);overflow-y:auto}
   .card label{display:flex;flex-direction:column;gap:4px;font-size:14px}
   .card .hint{font-size:12px;color:#aab2c5;line-height:1.5}
   body.dragging::after{content:'ここにドロップして画像・動画を再リンク';position:fixed;inset:8px;z-index:80;display:flex;align-items:center;justify-content:center;
@@ -49,7 +50,7 @@
   .btns button{flex:1}
   #dlgOk,#setOk{background:var(--blue);color:#06121f;border-color:var(--blue)}
   #toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);
-    background:#000c;color:#fff;padding:10px 16px;border-radius:20px;font-size:13px;z-index:50;
+    background:#000c;color:#fff;padding:10px 16px;border-radius:20px;font-size:13px;z-index:90;
     pointer-events:none;opacity:0;transition:opacity .2s;max-width:90vw;text-align:center}
   #toast.show{opacity:1}
   /* 右上ボタン */
@@ -145,6 +146,18 @@
       <input id="setLoop" type="number" min="1" max="99" step="1" inputmode="numeric">
     </label>
     <div class="hint">連続再生中に、同じノード／矢印へ入ろうとして回数がこの値に達すると、ランダムなノードまたは矢印へジャンプして再生を再開します。</div>
+    <hr style="width:100%;border:0;border-top:1px solid #444a5c;margin:2px 0">
+    <label>LM Studio のURL（画像のタグ付け用）
+      <input id="setLmUrl" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="http://localhost:1234/v1">
+    </label>
+    <label>モデルID（空なら自動選択）
+      <input id="setLmModel" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="LM Studio のモデル名">
+    </label>
+    <label>タグの語彙（任意・カンマ区切り）
+      <input id="setVocab" type="text" placeholder="空なら自由にタグを付ける">
+    </label>
+    <div class="hint">語彙を入れると、その中からだけタグを選びます（表記ゆれを防げます）。画像は上のURLのサーバーにだけ送られます。</div>
+    <div class="btns"><button id="setLmTest">🔌 接続テスト</button></div>
     <div class="btns">
       <button id="setCancel">キャンセル</button>
       <button id="setOk">保存</button>
@@ -1066,7 +1079,8 @@ $('#arrBtn').onclick = e => {
     { label: '↶ アンドゥ', disabled: !undoSt.length, fn: undo },
     { label: '↷ リドゥ', disabled: !redoSt.length, fn: redo },
     { label: '🏷 タグの類似度でソート', fn: () => arrange('tag') },
-    { label: '🖼 画像の類似度でソート', fn: () => arrange('image') }
+    { label: '🖼 画像の類似度でソート', fn: () => arrange('image') },
+    { label: tagging ? '⏹ タグ付けを中止' : '🤖 画像にタグ付け（LM Studio）', fn: autoTagLM }
   ]);
 };
 $('#fileBtn').onclick = e => {
@@ -2243,6 +2257,114 @@ async function sortedBySimilarity() {        // 画像の類似度（CLIP＋画�
   return [...orderByDist(D, M).map(i => feats[i].n), ...none];
 }
 
+/* ---------- LM Studio（ローカルのVLM）による画像の自動タグ付け ---------- */
+/* LM Studio の OpenAI互換API（/v1/chat/completions）へ、縮小した画像を送ってタグを受け取り、node.tags に追加する。
+   構造化出力（json_schema）で {"tags":[…]} を返させ、語彙を指定したときは enum で縛る */
+const LM_DEFAULT = 'http://localhost:1234/v1';
+let tagging = null, lmSchemaOK = true;      // tagging＝実行中の AbortController
+const lmBaseOf = u => ((u || '').trim() || LM_DEFAULT).replace(/\/+$/, '');
+function lmHint(base) {
+  const local = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(base);
+  if (location.protocol === 'https:' && /^http:/i.test(base) && !local)
+    return 'HTTPSのページから、HTTPのLAN内アドレスへは接続できません（HTTPS化するか、PCの localhost でこのアプリを開いてください）';
+  return 'LM Studioに接続できません（サーバーの起動・CORSの有効化・URLを確認してください）';
+}
+async function lmFetch(base, path, opt, ms, signal) {
+  const ac = new AbortController(); let to = false;
+  const t = setTimeout(() => { to = true; ac.abort(); }, ms);
+  const onAb = () => ac.abort();
+  if (signal) signal.addEventListener('abort', onAb, { once: true });
+  try { return await fetch(base + path, { ...opt, signal: ac.signal }); }
+  catch (e) {
+    if (to) throw new Error('応答がタイムアウトしました');
+    if (signal && signal.aborted) throw e;
+    const er = new Error(lmHint(base)); er.conn = true; throw er;
+  } finally { clearTimeout(t); if (signal) signal.removeEventListener('abort', onAb); }
+}
+async function lmModelId(base, signal) {     // モデルIDが空なら、/models の先頭（画像対応らしき名前を優先）を使う
+  if (settings.lmModel) return settings.lmModel;
+  const r = await lmFetch(base, '/models', {}, 10000, signal);
+  if (!r.ok) throw new Error('モデル一覧を取得できません（HTTP ' + r.status + '）');
+  const ids = ((await r.json()).data || []).map(m => m.id).filter(id => !/embed/i.test(id));
+  if (!ids.length) throw new Error('LM Studioにモデルがありません');
+  return ids.find(id => /vl|vision/i.test(id)) || ids[0];
+}
+async function lmTest() {                    // 設定ダイアログの「接続テスト」（入力中のURLで確認）
+  const base = lmBaseOf($('#setLmUrl').value);
+  toast('接続を確認中…');
+  try {
+    const r = await lmFetch(base, '/models', {}, 8000);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const ids = ((await r.json()).data || []).map(m => m.id);
+    toast(ids.length ? `接続できました。モデル：${ids.slice(0, 6).join('、')}${ids.length > 6 ? ' ほか' : ''}` : '接続できましたが、モデルが見つかりません');
+  } catch (e) { toast(e.message); }
+}
+async function lmTagOne(base, model, n, signal, vocab, existing) {
+  const el = await loadImgEl(n.image);
+  if (!el || !el.naturalWidth) throw new Error('画像を読み込めません');
+  const url = cropCanvas(el, analyzeImage(el), 512).toDataURL('image/jpeg', 0.85);   // キャラクター部分を切り出して縮小
+  const rules = [
+    'このキャラクター画像の「ポーズ・表情・向き・動作」を表す短い日本語のタグを3〜8個付けてください。',
+    '・背景や画風ではなく、キャラクターの状態の違いが分かるタグにする（例：立ち、座り、右向き、正面、笑顔、目を閉じる、手を振る）',
+    '・1つのタグは10文字以内の名詞や短い句にし、同じ意味のタグは表記を統一する'
+  ];
+  if (existing.length) rules.push('・既存のタグ：' + existing.join('、') + '\n　意味が合うものは必ず再利用し、足りないときだけ新しいタグを作る');
+  if (vocab.length) rules.push('・次のリストの中からだけ選ぶ：' + vocab.join('、'));
+  rules.push('出力は {"tags":["…","…"]} のJSONのみ。');
+  const schema = { type: 'object', properties: { tags: { type: 'array', maxItems: 8, items: vocab.length ? { type: 'string', enum: vocab } : { type: 'string' } } }, required: ['tags'] };
+  const post = async withSchema => {
+    const body = { model, temperature: 0.2, max_tokens: 800, stream: false,
+      messages: [
+        { role: 'system', content: 'あなたはキャラクターのキーフレーム画像にタグを付けるアシスタントです。' },
+        { role: 'user', content: [{ type: 'text', text: rules.join('\n') }, { type: 'image_url', image_url: { url } }] }
+      ] };
+    if (withSchema) body.response_format = { type: 'json_schema', json_schema: { name: 'tags', strict: true, schema } };
+    return lmFetch(base, '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 180000, signal);
+  };
+  let r = await post(lmSchemaOK);
+  if (r.status === 400 && lmSchemaOK) { lmSchemaOK = false; r = await post(false); }   // 構造化出力に未対応のサーバーは通常の出力で再試行
+  if (!r.ok) throw new Error(`LM Studioがエラーを返しました（HTTP ${r.status}）：${(await r.text()).slice(0, 100)}`);
+  const j = await r.json(), msg = j.choices && j.choices[0] && j.choices[0].message;
+  const txt = ((msg && msg.content) || '').replace(/<think>[\s\S]*?<\/think>/g, '');
+  let tags;
+  try { const m = txt.match(/\{[\s\S]*\}/); tags = JSON.parse(m ? m[0] : txt).tags; } catch (_) { tags = txt.split(/[,，、\n]/); }
+  tags = cleanTags((Array.isArray(tags) ? tags : []).map(t => String(t).replace(/^[#\-\s"'「」]+|["'「」\s]+$/g, '').slice(0, 20)));
+  if (vocab.length) tags = tags.filter(t => vocab.includes(t));
+  return tags.slice(0, 8);
+}
+async function autoTagLM() {
+  if (tagging) { if (confirm('タグ付けを中止しますか？')) tagging.abort(); return; }
+  closePopups();
+  // 対象：ノードを選択中ならその画像ノード、なければタグのない画像ノードすべて
+  let list = sel.nodes.map(nodeById).filter(n => n && n.image && media.has(n.image));
+  const picked = sel.nodes.length > 0;
+  if (!picked) list = nodes.filter(n => n.image && media.has(n.image) && !(n.tags && n.tags.length));
+  if (!list.length) return toast(picked ? '選択したノードに、再リンク済みの画像がありません' : 'タグのない画像ノードがありません（ノードを選択すると、選択分にタグを追加します）');
+  const base = lmBaseOf(settings.lmUrl);
+  if (!confirm(`${list.length} 件の画像を ${base} に送ってタグ付けします。よろしいですか？`)) return;
+  const ac = new AbortController(); tagging = ac;
+  const vocab = cleanTags((settings.vocab || '').split(/[,，、\n]/));
+  let ok = 0, fail = 0, firstErr = '';
+  try {
+    const model = await lmModelId(base, ac.signal);
+    for (let i = 0; i < list.length && !ac.signal.aborted; i++) {
+      toast(`タグ付け中… ${i + 1}/${list.length}（${model}）`);
+      try {
+        const tags = await lmTagOne(base, model, list[i], ac.signal, vocab, allTags().slice(0, 40));
+        if (tags.length) { list[i].tags = [...new Set([...(list[i].tags || []), ...tags])]; ok++; draw(); } else fail++;
+      } catch (e) {
+        if (ac.signal.aborted) break;
+        fail++; if (!firstErr) firstErr = e.message;
+        if (e.conn) break;                   // 接続できないときは残りも試さない
+      }
+    }
+  } catch (e) { if (!ac.signal.aborted) firstErr = e.message; }
+  const aborted = ac.signal.aborted;
+  tagging = null;
+  save(); draw();
+  toast(`タグ付け${aborted ? 'を中止しました' : '完了'}：成功 ${ok} 件` + (fail ? `、失敗 ${fail} 件` : '') + (firstErr ? `（${firstErr}）` : ''));
+}
+
 function layoutNodes(order, simFirst) {   // simFirst：並びの基準（画像の類似度）を矢印の交差などより優先する
   const N = order.length, idx = new Map(order.map((n, i) => [n.id, i]));
   const nw = order.map(n => box(n).w), nh = order.map(n => box(n).h + nodeExtra(n));
@@ -2529,22 +2651,26 @@ $('#fsBtn').onclick = async () => {
 const player = $('#player'), pImg = $('#pImg'), pVid = $('#pVid'), pCap = $('#pCap');
 /* 設定（端末のブラウザに保存） */
 const SET_KEY = 'keyframe-map.settings.v1';
-const settings = { still: 1.5, loop: 5 };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
+const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', vocab: '' };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
 try {
   const o = JSON.parse(localStorage.getItem(SET_KEY) || '{}');
   if (isFinite(o.still) && o.still > 0) settings.still = clamp(+o.still, 0.1, 60);
   if (isFinite(o.loop) && o.loop >= 1) settings.loop = clamp(Math.round(+o.loop), 1, 99);
+  for (const k of ['lmUrl', 'lmModel', 'vocab']) if (typeof o[k] === 'string') settings[k] = o[k];
 } catch (_) {}
 $('#setBtn').onclick = () => {
   closePopups();
   $('#setStill').value = settings.still; $('#setLoop').value = settings.loop;
+  $('#setLmUrl').value = settings.lmUrl; $('#setLmModel').value = settings.lmModel; $('#setVocab').value = settings.vocab;
   $('#setDlg').hidden = false;
 };
 $('#setCancel').onclick = () => { $('#setDlg').hidden = true; };
+$('#setLmTest').onclick = lmTest;
 $('#setOk').onclick = () => {
   const st = parseFloat($('#setStill').value), lp = parseInt($('#setLoop').value, 10);
   settings.still = isFinite(st) && st > 0 ? clamp(Math.round(st * 10) / 10, 0.1, 60) : settings.still;
   settings.loop = isFinite(lp) && lp >= 1 ? clamp(lp, 1, 99) : settings.loop;
+  settings.lmUrl = lmBaseOf($('#setLmUrl').value); settings.lmModel = $('#setLmModel').value.trim(); settings.vocab = $('#setVocab').value.trim();
   try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (_) {}
   $('#setDlg').hidden = true; toast('設定を保存しました');
 };
