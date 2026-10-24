@@ -618,7 +618,13 @@ function selBBox() {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   const add = (ax, ay, bx, by) => { x0 = Math.min(x0, ax); y0 = Math.min(y0, ay); x1 = Math.max(x1, bx); y1 = Math.max(y1, by); };
   sel.nodes.forEach(id => { const n = nodeById(id); if (n) { const b = box(n); add(n.x - b.w / 2, n.y - b.h / 2, n.x + b.w / 2, n.y + b.h / 2 + nodeExtra(n)); } });
-  sel.garrows.forEach(id => { const a = arrowById(id); if (a && isFree(a) && a.video) add(a.ux - a.vw / 2, a.uy - a.vh / 2, a.ux + a.vw / 2, a.uy + a.vh / 2 + arrowExtra(a)); });
+  sel.garrows.forEach(id => {
+    const a = arrowById(id); if (!a) return;
+    if (isFree(a)) { if (a.video) add(a.ux - a.vw / 2, a.uy - a.vh / 2, a.ux + a.vw / 2, a.uy + a.vh / 2 + arrowExtra(a)); return; }
+    const g = geom(a); if (!g) return;       // つながっている矢印（Ctrl＋クリックで選択）：動画プレビュー、なければ線の中間
+    if (a.video) add(g.vc.x - a.vw / 2, g.vc.y - a.vh / 2, g.vc.x + a.vw / 2, g.vc.y + a.vh / 2 + arrowExtra(a));
+    else add(g.mid.x - 14, g.mid.y - 14, g.mid.x + 14, g.mid.y + 14 + tagH(a));
+  });
   if (!isFinite(x0)) return null;
   const pad = 10 / view.s;
   return { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad };
@@ -637,7 +643,7 @@ function drawGroupBox() {
 }
 function drawArrow(a) {
   const g = geom(a); if (!g || g.free) return;
-  const s = sel.arrow === a.id;
+  const s = sel.arrow === a.id || sel.garrows.includes(a.id);
   const np = isNow('arrow', a.id);
   const col = np ? YEL : s ? '#ffb84d' : '#9fb4d6';
   const ang = Math.atan2(g.p2.y - g.p1.y, g.p2.x - g.p1.x), hl = 16;
@@ -1170,13 +1176,16 @@ function detachArrows(list) {                // 矢印をノードから外す�
 }
 const detachMsg = r => '接続を解除しました' + (r.kept ? `（未リンクの矢印 ${r.kept} 本` + (r.dropped ? `、動画のない矢印 ${r.dropped} 本は削除` : '') + '）' : r.dropped ? `（動画のない矢印 ${r.dropped} 本は削除）` : '');
 function deleteSelection() {
-  const ga = sel.garrows.map(arrowById).filter(Boolean);   // 範囲選択した未リンクの矢印
+  const gall = sel.garrows.map(arrowById).filter(Boolean);
+  const ga = gall.filter(isFree), gl = gall.filter(a => !isFree(a));   // 選択した未リンクの矢印／（Ctrl＋クリックで選んだ）つながっている矢印
   let gmsg = '';
   if (ga.length) {
     ga.forEach(a => { const v = a.video && vids.get(a.video); if (v) v.el.pause(); });
-    arrows = arrows.filter(x => !ga.includes(x)); sel.garrows = [];
+    arrows = arrows.filter(x => !ga.includes(x));
     gmsg = `未リンクの矢印を ${ga.length} 本削除しました`;
   }
+  if (gl.length) { gmsg += (gmsg ? '　' : '') + detachMsg(detachArrows(gl)); }
+  sel.garrows = [];
   const ns = sel.nodes.map(nodeById).filter(Boolean);
   if (ns.length) {
     const isLinked = n => arrows.some(a => a.from === n.id || a.to === n.id);
@@ -1337,10 +1346,21 @@ function togglePlay(a) {
   });
   draw();
 }
+function ctrlToggle(hit) {                   // 複数選択（レイアウトモードへ切り替えて、まとめて移動・削除できるようにする）
+  const sn = [...sel.nodes], sa = sel.arrow, sg = [...sel.garrows];
+  if (mode !== 'layout') setMode('layout');
+  sel.nodes = sn; sel.arrow = null; sel.garrows = sg;
+  if (sa && !sel.garrows.includes(sa)) sel.garrows.push(sa);
+  const list = hit.type === 'node' ? sel.nodes : sel.garrows, i = list.indexOf(hit.id);
+  if (i >= 0) list.splice(i, 1); else list.push(hit.id);
+  sel.grp = sel.nodes.length + sel.garrows.length > 0;
+  updateConnUI(); draw();
+}
 function onTap(g) {
   const tx = hitTagX(g.w.x, g.w.y);          // タグの「×」をタップ：そのタグを削除
   if (tx) { removeTag([tx.o], tx.tag); toast(`タグ「${tx.tag}」を削除しました`); return; }
   const hit = g.hit;
+  if (g.ctrl) { if (hit) ctrlToggle(hit); return; }   // Ctrl＋クリック：選択に追加／解除
   if (hit && hit.type === 'node') selectNode(hit.id);
   else if (hit && hit.type === 'arrow') {
     const a = arrowById(hit.id);
@@ -1403,7 +1423,7 @@ cv.addEventListener('pointerdown', e => {
       if (hd) { scale = hd; scale.items = selItems(); }
       else if ((gb && w.x >= gb.x0 && w.x <= gb.x1 && w.y >= gb.y0 && w.y <= gb.y1) || inN || inA) items = selItems();
     }
-    g = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y, w, hit, moved: false, long: false, pinched: false, drags: items, scale };
+    g = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y, w, hit, moved: false, long: false, pinched: false, drags: items, scale, ctrl: e.ctrlKey || e.metaKey };
     const cur = g;
     const sa = g.scale ? null : hitSlider(w.x, w.y);
     if (sa) startSlider(g, sa, e.clientX);
@@ -1687,6 +1707,29 @@ async function relinkFiles(files) {
   relinking = true;
   try { await relinkRun(files); } finally { relinking = false; }
 }
+/* メディア再リンクした動画につながっている矢印の前後のノードで、静止画が空のものは動画の先頭／最終フレームから生成する */
+async function fillEmptyFrames(names) {
+  let cnt = 0;
+  for (const a of arrows.slice()) {
+    if (isFree(a) || !a.video || !names.has(a.video) || !media.has(a.video)) continue;
+    const f = nodeById(a.from), t = nodeById(a.to);
+    const needF = !!f && !f.image, needT = !!t && !t.image;
+    if (!needF && !needT) continue;
+    try {
+      const fr = await extractFrames(a.video, needF && needT ? undefined : needF ? 'first' : 'last');
+      const base = a.video.replace(/\.[^.]+$/, '');
+      const put = async (node, blob, suffix) => {
+        const fn = registerFile(new File([blob], uniqueName(base + suffix + '.png'), { type: 'image/png' }));
+        generated.add(fn);
+        await Promise.race([new Promise(res => applyNodeImage(node, fn, res)), new Promise(res => setTimeout(res, 5000))]);
+        cnt++;
+      };
+      if (needF && fr.first) await put(f, fr.first, '_first');
+      if (needT && fr.last) await put(t, fr.last, '_last');
+    } catch (_) {}
+  }
+  return cnt;
+}
 async function relinkRun(files) {
   toast('ファイルを照合中…');
   const { plan, renamed: serialN } = await planRelink(files);
@@ -1739,12 +1782,14 @@ async function relinkRun(files) {
     }
     clearSel(); updateConnUI();
   }
+  const filled = await fillEmptyFrames(new Set(plan.map(p => p.name)));   // リンク済みの矢印に一致した動画でも、前後の静止画が空なら生成
   save(); draw();
   const m = missingMedia();
   const parts = [m ? `リンク完了（未リンク ${m} 件）` : 'すべてのメディアをリンクしました'];
   if (rn) parts.push(`ハッシュ一致でファイル名を更新：${rn} 件`);
   if (serialN) parts.push(`同名で内容が異なるファイル ${serialN} 件に連番を付けて別々に保持`);
   if (newImgs.length) parts.push(`新規ノード ${newImgs.length} 件を追加`);
+  if (filled) parts.push(`空だった静止画 ${filled} 件を動画から生成`);
   const addedVids = newVids.length - badVids;
   if (addedVids) parts.push(framed === addedVids
     ? `動画 ${framed} 件を追加（先頭・最終フレームのノードを自動生成して接続）`
