@@ -172,7 +172,7 @@ let W = 0, H = 0, dpr = 1;
 const view = { x: 0, y: 0, s: 1 };          // screen = world * s + (x, y)
 let nodes = [], arrows = [];                 // 矢印の from/to が null ＝ ノードにつながっていない「未リンクの矢印」（位置は ux, uy）
 const sel = { nodes: [], arrow: null, garrows: [], grp: false };   // nodes＝選択順／garrows＝範囲選択した未リンクの矢印／grp＝範囲選択・全選択（外枠と四隅のハンドルを表示）
-let band = null;                             // レイアウトモードの範囲選択（画面座標）{x0,y0,x1,y1}
+let band = null;                             // レイアウト・範囲選択モードの範囲選択（画面座標）{x0,y0,x1,y1}
 let nowPlaying = null;                       // 連続再生中の項目 {k:'node'|'arrow', id}（黄色で強調）
 const YEL = '#ffe600';
 const isNow = (k, id) => !!nowPlaying && nowPlaying.k === k && nowPlaying.id === id;
@@ -190,10 +190,12 @@ const toWorld = (px, py) => ({ x: (px - view.x) / view.s, y: (py - view.y) / vie
 const MODES = {
   pencil: '✏️ ペンシル',
   connect: '🔗 接続編集',
-  layout: '📐 レイアウト・タグ',
+  layout: '📐 レイアウト・範囲選択',
+  multi: '☑️ レイアウト・複数選択',
   hand: '✋ ハンド'
 };
-const MODE_ICON = { pencil: '✏️', connect: '🔗', layout: '📐', hand: '✋' };
+const MODE_ICON = { pencil: '✏️', connect: '🔗', layout: '📐', multi: '☑️', hand: '✋' };
+const isLayoutMode = m => m === 'layout' || m === 'multi';   // 範囲選択／複数選択：どちらも選択したものの移動・拡大縮小・タグ編集ができる
 const NODE_W = 120, NODE_H = 44;
 
 let toastT = 0;
@@ -613,12 +615,18 @@ function render() {
 }
 
 /* 範囲選択・全選択したものを囲む破線四角と、四隅のハンドル */
-function grpShown() { return mode === 'layout' && sel.grp && sel.nodes.length + sel.garrows.length > 0; }
+function grpShown() { return (mode === 'layout' ? sel.grp : mode === 'multi') && sel.nodes.length + sel.garrows.length > 0; }
 function selBBox() {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   const add = (ax, ay, bx, by) => { x0 = Math.min(x0, ax); y0 = Math.min(y0, ay); x1 = Math.max(x1, bx); y1 = Math.max(y1, by); };
   sel.nodes.forEach(id => { const n = nodeById(id); if (n) { const b = box(n); add(n.x - b.w / 2, n.y - b.h / 2, n.x + b.w / 2, n.y + b.h / 2 + nodeExtra(n)); } });
-  sel.garrows.forEach(id => { const a = arrowById(id); if (a && isFree(a) && a.video) add(a.ux - a.vw / 2, a.uy - a.vh / 2, a.ux + a.vw / 2, a.uy + a.vh / 2 + arrowExtra(a)); });
+  sel.garrows.forEach(id => {
+    const a = arrowById(id); if (!a) return;
+    if (isFree(a)) { if (a.video) add(a.ux - a.vw / 2, a.uy - a.vh / 2, a.ux + a.vw / 2, a.uy + a.vh / 2 + arrowExtra(a)); return; }
+    const g = geom(a); if (!g) return;       // つながっている矢印（複数選択モード）：動画プレビュー、なければ線の中間
+    if (a.video) add(g.vc.x - a.vw / 2, g.vc.y - a.vh / 2, g.vc.x + a.vw / 2, g.vc.y + a.vh / 2 + arrowExtra(a));
+    else add(g.mid.x - 14, g.mid.y - 14, g.mid.x + 14, g.mid.y + 14 + tagH(a));
+  });
   if (!isFinite(x0)) return null;
   const pad = 10 / view.s;
   return { x0: x0 - pad, y0: y0 - pad, x1: x1 + pad, y1: y1 + pad };
@@ -637,7 +645,7 @@ function drawGroupBox() {
 }
 function drawArrow(a) {
   const g = geom(a); if (!g || g.free) return;
-  const s = sel.arrow === a.id;
+  const s = sel.arrow === a.id || sel.garrows.includes(a.id);
   const np = isNow('arrow', a.id);
   const col = np ? YEL : s ? '#ffb84d' : '#9fb4d6';
   const ang = Math.atan2(g.p2.y - g.p1.y, g.p2.x - g.p1.x), hl = 16;
@@ -704,7 +712,8 @@ function hitSlider(wx, wy) {
   return null;
 }
 function startSlider(gs, a, cx) {
-  selectArrow(a.id); updateConnUI();
+  if (mode !== 'multi') selectArrow(a.id);
+  updateConnUI();
   gs.slider = { a, was: a.rt === 'play' };
   gs.moved = true; gs.drag = null;
   seekFromX(a, cx);
@@ -978,11 +987,20 @@ $('#cDel').onclick = disconnect;
 
 /* ---------- モード ---------- */
 function setMode(m) {
-  mode = m; sel.grp = false;
-  if (m !== 'connect') {
+  const prev = mode; mode = m; sel.grp = false;
+  if (prev === 'multi' && m !== 'multi' && m !== 'layout') {   // 複数選択から他のモードへ：1つだけ残す
+    if (sel.nodes.length) sel.arrow = null; else if (sel.garrows.length) sel.arrow = sel.garrows[sel.garrows.length - 1];
+    sel.garrows = [];
+  }
+  if (m === 'multi') {                       // 選択中の矢印も複数選択の対象にする
+    if (sel.arrow) { if (!sel.garrows.includes(sel.arrow)) sel.garrows.push(sel.arrow); sel.arrow = null; }
+  } else if (m === 'layout' && prev === 'multi') {             // 範囲選択へ：つながっている矢印は選択から外す
+    sel.garrows = sel.garrows.filter(id => { const a = arrowById(id); return a && isFree(a); });
+    sel.grp = sel.nodes.length + sel.garrows.length > 0;
+  } else if (m !== 'connect') {
     if (sel.arrow) sel.nodes = [];
     else if (sel.nodes.length > 1) sel.nodes = [sel.nodes[sel.nodes.length - 1]];
-  }
+  } else if (sel.nodes.length > 2) sel.nodes = sel.nodes.slice(-2);
   $('#connRow').hidden = m !== 'connect';
   $('#modeBtn').textContent = MODE_ICON[m];
   $('#modeBtn').title = $('#modeBtn').ariaLabel = MODES[m].replace(/^\S+\s*/, '');
@@ -1039,7 +1057,7 @@ $('#fileBtn').onclick = e => {
 
 /* ---------- 長押しメニュー ---------- */
 let pickCtx = null;
-/* タグのサブメニュー（レイアウト・タグモード）。targets＝対象のノード・矢印の配列 */
+/* タグのサブメニュー（どのモードでも使える）。targets＝対象のノード・矢印の配列 */
 function tagToast(n, tag, verb) { toast(n ? `タグ「${tag}」を${n}件${verb}しました` : (verb === '追加' ? `タグ「${tag}」は設定済みです` : 'そのタグは設定されていません')); }
 function askTag(targets) {
   const t = prompt('タグ名（カンマ区切りで複数）', '');
@@ -1120,7 +1138,7 @@ function pasteClip(p) {
       video: a.video, videoHash: a.videoHash, vw: a.vw, vh: a.vh, tags: (a.tags || []).slice(), rt: 'idle' };
   });
   nodes.push(...nn); arrows.push(...na);
-  if (mode !== 'layout') setMode('layout');  // 貼り付けたものをすぐ移動できるようレイアウトモードへ
+  if (!isLayoutMode(mode)) setMode('layout');  // 貼り付けたものをすぐ移動できるようレイアウト・範囲選択モードへ
   sel.nodes = nn.map(n => n.id); sel.arrow = null; sel.garrows = na.filter(a => !a.from).map(a => a.id); sel.grp = true;
   updateConnUI(); save(); draw();
   toast(`貼り付けました（ノード ${nn.length} 件・矢印 ${na.length} 本）`);
@@ -1170,13 +1188,16 @@ function detachArrows(list) {                // 矢印をノードから外す�
 }
 const detachMsg = r => '接続を解除しました' + (r.kept ? `（未リンクの矢印 ${r.kept} 本` + (r.dropped ? `、動画のない矢印 ${r.dropped} 本は削除` : '') + '）' : r.dropped ? `（動画のない矢印 ${r.dropped} 本は削除）` : '');
 function deleteSelection() {
-  const ga = sel.garrows.map(arrowById).filter(Boolean);   // 範囲選択した未リンクの矢印
+  const gall = sel.garrows.map(arrowById).filter(Boolean);
+  const ga = gall.filter(isFree), gl = gall.filter(a => !isFree(a));   // 選択した未リンクの矢印／（複数選択モードで選んだ）つながっている矢印
   let gmsg = '';
   if (ga.length) {
     ga.forEach(a => { const v = a.video && vids.get(a.video); if (v) v.el.pause(); });
-    arrows = arrows.filter(x => !ga.includes(x)); sel.garrows = [];
+    arrows = arrows.filter(x => !ga.includes(x));
     gmsg = `未リンクの矢印を ${ga.length} 本削除しました`;
   }
+  if (gl.length) { gmsg += (gmsg ? '　' : '') + detachMsg(detachArrows(gl)); }
+  sel.garrows = [];
   const ns = sel.nodes.map(nodeById).filter(Boolean);
   if (ns.length) {
     const isLinked = n => arrows.some(a => a.from === n.id || a.to === n.id);
@@ -1204,6 +1225,10 @@ function deleteSelection() {
   }
   updateConnUI(); save(); draw();
 }
+const tagTargets = () => {                   // 選択中のノードと矢印（複数選択モードではつながっている矢印も含む）
+  const ids = new Set(sel.garrows); if (sel.arrow) ids.add(sel.arrow);
+  return [...sel.nodes.map(nodeById), ...[...ids].map(arrowById)].filter(Boolean);
+};
 function onLong(g) {
   const hit = g.hit;
   const gb = grpShown() ? selBBox() : null;   // 範囲選択の四角の内側（または選択中の項目）の長押し：コピー／切り取り／削除
@@ -1211,7 +1236,7 @@ function onLong(g) {
     (hit && ((hit.type === 'node' && sel.nodes.includes(hit.id)) || (hit.type === 'arrow' && sel.garrows.includes(hit.id)))));
   if (inGrp) {
     if (navigator.vibrate) navigator.vibrate(15);
-    const { ns, fa } = selParts(), tg = [...ns, ...fa];
+    const tg = tagTargets();
     showPopup(g.sx, g.sy, [
       { label: '🏷 タグを追加', disabled: !tg.length, fn: () => tagAddMenu(g.sx, g.sy, tg) },
       { label: '🏷 タグを一括削除', disabled: !tg.some(o => o.tags && o.tags.length), fn: () => tagDelMenu(g.sx, g.sy, tg) },
@@ -1221,7 +1246,10 @@ function onLong(g) {
     ]);
     return;
   }
-  if (hit) {
+  if (hit && mode === 'multi') {             // 選択外のものを長押し：それだけを選択
+    const isIn = hit.type === 'node' ? sel.nodes.includes(hit.id) : sel.garrows.includes(hit.id);
+    if (!isIn) { sel.nodes = hit.type === 'node' ? [hit.id] : []; sel.garrows = hit.type === 'arrow' ? [hit.id] : []; sel.arrow = null; }
+  } else if (hit) {
     if (hit.type === 'node' && !sel.nodes.includes(hit.id)) { sel.nodes = [hit.id]; sel.arrow = null; sel.garrows = []; sel.grp = false; }
     if (hit.type === 'arrow' && sel.arrow !== hit.id) selectArrow(hit.id);
   }
@@ -1248,7 +1276,8 @@ function onLong(g) {
       { label: '⏭ 直後の動画の先頭フレームから生成', disabled: !nexts.length, fn: () => genFrame(o, nexts, 'first', g.sx, g.sy) },
       { label: 'ファイル解除', disabled: !o.image, fn: () => { o.image = null; o.imageHash = null; save(); draw(); } },
       { label: '✏️ 名前を変更', fn: () => { const t = prompt('ノード名', o.name); if (t !== null) { o.name = t.trim() || o.name; save(); draw(); } } },
-      ...(mode === 'layout' ? [{ label: '🏷 タグを追加', fn: () => tagAddMenu(g.sx, g.sy, [o]) }] : []),
+      { label: '🏷 タグを追加', fn: () => tagAddMenu(g.sx, g.sy, [o]) },
+      { label: '🏷 タグを削除', disabled: !(o.tags && o.tags.length), fn: () => tagDelMenu(g.sx, g.sy, [o]) },
       { label: '📋 コピー (Ctrl+C)', fn: () => copySel() },
       { label: '✂️ 切り取り (Ctrl+X)', fn: cutSel },
       { label: '🗑 ノードを削除', fn: () => deleteNode(o) }
@@ -1264,7 +1293,8 @@ function onLong(g) {
           } else { o.video = null; o.videoHash = null; o.rt = 'idle'; }
           save(); draw();
         } },
-      ...(mode === 'layout' ? [{ label: '🏷 タグを追加', fn: () => tagAddMenu(g.sx, g.sy, [o]) }] : []),
+      { label: '🏷 タグを追加', fn: () => tagAddMenu(g.sx, g.sy, [o]) },
+      { label: '🏷 タグを削除', disabled: !(o.tags && o.tags.length), fn: () => tagDelMenu(g.sx, g.sy, [o]) },
       { label: '📋 コピー (Ctrl+C)', disabled: !o.video, fn: () => copySel() },
       { label: '✂️ 切り取り (Ctrl+X)', disabled: !o.video, fn: cutSel },
       { label: '🗑 矢印を削除', fn: () => { arrows = arrows.filter(a => a !== o); clearSel(); updateConnUI(); save(); draw(); } }
@@ -1337,10 +1367,26 @@ function togglePlay(a) {
   });
   draw();
 }
+const onPlayBtn = (a, g) => {                // 動画プレビュー中央の再生ボタンの位置か
+  if (!a.video) return false;
+  const gm = geom(a);
+  return !!gm && Math.hypot(g.w.x - gm.vc.x, g.w.y - gm.vc.y) <= Math.max(Math.min(28, a.vw / 3), 20 / view.s);
+};
+function toggleMulti(kind, id) {             // 複数選択モード：タップで選択に追加／解除
+  sel.arrow = null;
+  const list = kind === 'node' ? sel.nodes : sel.garrows, i = list.indexOf(id);
+  if (i >= 0) list.splice(i, 1); else list.push(id);
+}
 function onTap(g) {
   const tx = hitTagX(g.w.x, g.w.y);          // タグの「×」をタップ：そのタグを削除
   if (tx) { removeTag([tx.o], tx.tag); toast(`タグ「${tx.tag}」を削除しました`); return; }
   const hit = g.hit;
+  if (mode === 'multi') {
+    if (hit && hit.type === 'node') toggleMulti('node', hit.id);
+    else if (hit && hit.type === 'arrow') { const a = arrowById(hit.id); if (onPlayBtn(a, g)) togglePlay(a); else toggleMulti('arrow', a.id); }
+    else clearSel();
+    updateConnUI(); draw(); return;
+  }
   if (hit && hit.type === 'node') selectNode(hit.id);
   else if (hit && hit.type === 'arrow') {
     const a = arrowById(hit.id);
@@ -1380,19 +1426,20 @@ function handleAt(b, px, py) {               // 四隅のハンドル（反対�
   return null;
 }
 cv.addEventListener('pointerdown', e => {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;   // マウスの右・中ボタンはドラッグ操作に使わない（右クリックはメニュー）
   try { cv.setPointerCapture(e.pointerId); } catch (_) {}
   ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (ptrs.size === 1) {
     const w = toWorld(e.clientX, e.clientY), hit = hitTest(w.x, w.y);
     let items = null, scale = null;          // レイアウトモード：items＝一括移動／scale＝四隅のハンドルで拡大縮小
-    if (mode === 'layout') {
+    if (isLayoutMode(mode)) {
       const gb = grpShown() ? selBBox() : null;
       const hd = gb && handleAt(gb, e.clientX, e.clientY);
       const ar = hit && hit.type === 'arrow' ? arrowById(hit.id) : null;
       const inN = hit && hit.type === 'node' && sel.nodes.includes(hit.id);
       const inA = ar && isFree(ar) && (sel.arrow === ar.id || sel.garrows.includes(ar.id));
       if (hd) { scale = hd; scale.items = selItems(); }
-      else if ((gb && w.x >= gb.x0 && w.x <= gb.x1 && w.y >= gb.y0 && w.y <= gb.y1) || inN || inA) items = selItems();
+      else if ((gb && w.x >= gb.x0 && w.x <= gb.x1 && w.y >= gb.y0 && w.y <= gb.y1) || inN || inA) { items = selItems(); if (!items.length) items = null; }   // 動かせるものがなければキャンバスのスクロール
     }
     g = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y, w, hit, moved: false, long: false, pinched: false, drags: items, scale };
     const cur = g;
@@ -1412,12 +1459,13 @@ function startPinch() {
   g.v0 = { ...view }; g.c0 = c; g.rz = false;
   g.wc = { x: (c.x - view.x) / view.s, y: (c.y - view.y) / view.s };
   g.target = null;
-  if (mode === 'layout') {
-    if (sel.nodes.length === 1) {
+  if (isLayoutMode(mode)) {
+    const aIds = sel.arrow ? [sel.arrow] : mode === 'multi' ? sel.garrows : [];
+    if (sel.nodes.length === 1 && !aIds.length) {
       const n = nodeById(sel.nodes[0]);
       if (n && n.image) g.target = { k: 'node', o: n, w0: n.pw, h0: n.ph };
-    } else if (sel.arrow) {
-      const a = arrowById(sel.arrow);
+    } else if (!sel.nodes.length && aIds.length === 1) {
+      const a = arrowById(aIds[0]);
       if (a && a.video) g.target = { k: 'arrow', o: a, w0: a.vw, h0: a.vh };
     }
   }
@@ -1473,7 +1521,7 @@ function applyBand(b) {                      // 範囲内のノードと未リ�
 function selectAll() {                       // Ctrl+A：ノードと未リンクの矢印をすべて選択（レイアウトモードへ切り替え）
   const fr = arrows.filter(a => isFree(a) && a.video);
   if (!nodes.length && !fr.length) return;
-  if (mode !== 'layout') setMode('layout');
+  if (!isLayoutMode(mode)) setMode('layout');
   sel.nodes = nodes.map(n => n.id); sel.arrow = null; sel.garrows = fr.map(a => a.id); sel.grp = true;
   updateConnUI(); draw();
   toast(`ノード ${sel.nodes.length} 件・未リンクの矢印 ${sel.garrows.length} 本を選択`);
@@ -1492,9 +1540,16 @@ function pointerEnd(e) {
 }
 cv.addEventListener('pointerup', pointerEnd);
 cv.addEventListener('pointercancel', pointerEnd);
-cv.addEventListener('contextmenu', e => e.preventDefault());
+let lastPtrType = 'mouse';
+cv.addEventListener('contextmenu', e => {    // マウスの右クリック：長押しと同じサブメニューを表示（タッチの長押しは従来のタイマーで処理）
+  e.preventDefault();
+  if (lastPtrType !== 'mouse') return;
+  if (g) { clearTimeout(g.timer); g.long = true; }
+  const w = toWorld(e.clientX, e.clientY);
+  onLong({ hit: hitTest(w.x, w.y), w, sx: e.clientX, sy: e.clientY });
+});
 cv.addEventListener('pointermove', e => { lastPt = { x: e.clientX, y: e.clientY }; });
-cv.addEventListener('pointerdown', e => { lastPt = { x: e.clientX, y: e.clientY }; });
+cv.addEventListener('pointerdown', e => { lastPt = { x: e.clientX, y: e.clientY }; lastPtrType = e.pointerType; });
 document.addEventListener('gesturestart', e => e.preventDefault());
 
 // PC: ホイールでズーム
@@ -2268,6 +2323,8 @@ function nextItem(it) {
 function startItem() {
   if (sel.arrow && arrowById(sel.arrow)) return { k: 'arrow', id: sel.arrow };
   if (sel.nodes.length && nodeById(sel.nodes[0])) return { k: 'node', id: sel.nodes[0] };
+  const ga = sel.garrows.find(id => arrowById(id));
+  if (ga) return { k: 'arrow', id: ga };
   return randomItem(null);
 }
 function goNext(it) {
