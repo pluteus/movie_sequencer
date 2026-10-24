@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'keyframe-map-v26';
+const CACHE = 'keyframe-map-v28';
 const ASSETS = ['./', './index.html', './about.html', './screenshot.jpg', './manifest.json'];
 
 self.addEventListener('install', e => {

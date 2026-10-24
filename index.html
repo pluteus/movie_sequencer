@@ -157,6 +157,7 @@
       <input id="setVocab" type="text" placeholder="空なら自由にタグを付ける">
     </label>
     <div class="hint">語彙を入れると、その中からだけタグを選びます（表記ゆれを防げます）。画像は上のURLのサーバーにだけ送られます。</div>
+    <label style="flex-direction:row;align-items:center;gap:8px"><input id="setNoThink" type="checkbox" style="width:auto;padding:0"><span>思考を飛ばす（空の thinking を返答の先頭に入れる）</span></label>
     <div class="btns"><button id="setLmTest">🔌 接続テスト</button></div>
     <div class="btns">
       <button id="setCancel">キャンセル</button>
@@ -2261,8 +2262,16 @@ async function sortedBySimilarity() {        // 画像の類似度（CLIP＋画�
 /* LM Studio の OpenAI互換API（/v1/chat/completions）へ、縮小した画像を送ってタグを受け取り、node.tags に追加する。
    構造化出力（json_schema）で {"tags":[…]} を返させ、語彙を指定したときは enum で縛る */
 const LM_DEFAULT = 'http://localhost:1234/v1';
-let tagging = null, lmSchemaOK = true;      // tagging＝実行中の AbortController
-const lmBaseOf = u => ((u || '').trim() || LM_DEFAULT).replace(/\/+$/, '');
+let tagging = null, lmSchemaOK = true, lmPrefillOK = true;      // tagging＝実行中の AbortController
+const lmBaseOf = u => {                      // ポート番号までのURLだけが入力されたときは /v1 を補う
+  let s = ((u || '').trim() || LM_DEFAULT).replace(/\/+$/, '');
+  if (!/^[a-z]+:\/\//i.test(s)) s = 'http://' + s;
+  try { if (new URL(s).pathname.replace(/\/+$/, '') === '') s += '/v1'; } catch (_) {}
+  return s;
+};
+async function lmJson(r) {
+  try { return await r.json(); } catch (_) { throw new Error('LM Studioの応答ではありません（URLは http://…:1234/v1 の形式です）'); }
+}
 function lmHint(base) {
   const local = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(base);
   if (location.protocol === 'https:' && /^http:/i.test(base) && !local)
@@ -2285,7 +2294,7 @@ async function lmModelId(base, signal) {     // モデルIDが空なら、/model
   if (settings.lmModel) return settings.lmModel;
   const r = await lmFetch(base, '/models', {}, 10000, signal);
   if (!r.ok) throw new Error('モデル一覧を取得できません（HTTP ' + r.status + '）');
-  const ids = ((await r.json()).data || []).map(m => m.id).filter(id => !/embed/i.test(id));
+  const ids = ((await lmJson(r)).data || []).map(m => m.id).filter(id => !/embed/i.test(id));
   if (!ids.length) throw new Error('LM Studioにモデルがありません');
   return ids.find(id => /vl|vision/i.test(id)) || ids[0];
 }
@@ -2295,10 +2304,16 @@ async function lmTest() {                    // 設定ダイアログの「接�
   try {
     const r = await lmFetch(base, '/models', {}, 8000);
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    const ids = ((await r.json()).data || []).map(m => m.id);
-    toast(ids.length ? `接続できました。モデル：${ids.slice(0, 6).join('、')}${ids.length > 6 ? ' ほか' : ''}` : '接続できましたが、モデルが見つかりません');
+    const ids = ((await lmJson(r)).data || []).map(m => m.id);
+    toast(ids.length ? `接続できました（${base}）。モデル：${ids.slice(0, 6).join('、')}${ids.length > 6 ? ' ほか' : ''}` : '接続できましたが、モデルが見つかりません');
   } catch (e) { toast(e.message); }
 }
+const lmText = j => {                       // content が空で reasoning_content に結果が入るモデルにも対応
+  const m = (j && j.choices && j.choices[0] && j.choices[0].message) || {};
+  const t = (m.content || '').trim() ? m.content : (m.reasoning_content || m.reasoning || '');
+  return String(t).replace(/<think>[\s\S]*?<\/think>/g, '');
+};
+const NO_THINK = '<think>\n\n</think>\n\n';   // 空の thinking ブロック（返答の先頭に入れて思考を飛ばす）
 async function lmTagOne(base, model, n, signal, vocab, existing) {
   const el = await loadImgEl(n.image);
   if (!el || !el.naturalWidth) throw new Error('画像を読み込めません');
@@ -2312,20 +2327,29 @@ async function lmTagOne(base, model, n, signal, vocab, existing) {
   if (vocab.length) rules.push('・次のリストの中からだけ選ぶ：' + vocab.join('、'));
   rules.push('出力は {"tags":["…","…"]} のJSONのみ。');
   const schema = { type: 'object', properties: { tags: { type: 'array', maxItems: 8, items: vocab.length ? { type: 'string', enum: vocab } : { type: 'string' } } }, required: ['tags'] };
-  const post = async withSchema => {
+  const post = async (withSchema, withPrefill) => {
     const body = { model, temperature: 0.2, max_tokens: 800, stream: false,
       messages: [
         { role: 'system', content: 'あなたはキャラクターのキーフレーム画像にタグを付けるアシスタントです。' },
         { role: 'user', content: [{ type: 'text', text: rules.join('\n') }, { type: 'image_url', image_url: { url } }] }
       ] };
+    if (withPrefill) body.messages.push({ role: 'assistant', content: NO_THINK });
     if (withSchema) body.response_format = { type: 'json_schema', json_schema: { name: 'tags', strict: true, schema } };
     return lmFetch(base, '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 180000, signal);
   };
-  let r = await post(lmSchemaOK);
-  if (r.status === 400 && lmSchemaOK) { lmSchemaOK = false; r = await post(false); }   // 構造化出力に未対応のサーバーは通常の出力で再試行
-  if (!r.ok) throw new Error(`LM Studioがエラーを返しました（HTTP ${r.status}）：${(await r.text()).slice(0, 100)}`);
-  const j = await r.json(), msg = j.choices && j.choices[0] && j.choices[0].message;
-  const txt = ((msg && msg.content) || '').replace(/<think>[\s\S]*?<\/think>/g, '');
+  let sc = lmSchemaOK, pre = !!settings.noThink && lmPrefillOK, r = await post(sc, pre);
+  while (r.status === 400 && (pre || sc)) {   // 受け付けない機能（先頭の返答の指定→構造化出力）を順に外して再試行
+    if (pre) { pre = false; lmPrefillOK = false; } else { sc = false; lmSchemaOK = false; }
+    r = await post(sc, pre);
+  }
+  const bad = async x => new Error(`LM Studioがエラーを返しました（HTTP ${x.status}）：${(await x.text()).slice(0, 100)}`);
+  if (!r.ok) throw await bad(r);
+  let txt = lmText(await lmJson(r));
+  if (!txt.trim() && pre) {                   // 先頭の返答の指定で空になるモデルは、指定なしでやり直す
+    lmPrefillOK = false; r = await post(sc, false);
+    if (!r.ok) throw await bad(r);
+    txt = lmText(await lmJson(r));
+  }
   let tags;
   try { const m = txt.match(/\{[\s\S]*\}/); tags = JSON.parse(m ? m[0] : txt).tags; } catch (_) { tags = txt.split(/[,，、\n]/); }
   tags = cleanTags((Array.isArray(tags) ? tags : []).map(t => String(t).replace(/^[#\-\s"'「」]+|["'「」\s]+$/g, '').slice(0, 20)));
@@ -2651,17 +2675,18 @@ $('#fsBtn').onclick = async () => {
 const player = $('#player'), pImg = $('#pImg'), pVid = $('#pVid'), pCap = $('#pCap');
 /* 設定（端末のブラウザに保存） */
 const SET_KEY = 'keyframe-map.settings.v1';
-const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', vocab: '' };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
+const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', vocab: '', noThink: true };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
 try {
   const o = JSON.parse(localStorage.getItem(SET_KEY) || '{}');
   if (isFinite(o.still) && o.still > 0) settings.still = clamp(+o.still, 0.1, 60);
   if (isFinite(o.loop) && o.loop >= 1) settings.loop = clamp(Math.round(+o.loop), 1, 99);
   for (const k of ['lmUrl', 'lmModel', 'vocab']) if (typeof o[k] === 'string') settings[k] = o[k];
+  if (typeof o.noThink === 'boolean') settings.noThink = o.noThink;
 } catch (_) {}
 $('#setBtn').onclick = () => {
   closePopups();
   $('#setStill').value = settings.still; $('#setLoop').value = settings.loop;
-  $('#setLmUrl').value = settings.lmUrl; $('#setLmModel').value = settings.lmModel; $('#setVocab').value = settings.vocab;
+  $('#setLmUrl').value = settings.lmUrl; $('#setLmModel').value = settings.lmModel; $('#setVocab').value = settings.vocab; $('#setNoThink').checked = settings.noThink;
   $('#setDlg').hidden = false;
 };
 $('#setCancel').onclick = () => { $('#setDlg').hidden = true; };
@@ -2671,6 +2696,7 @@ $('#setOk').onclick = () => {
   settings.still = isFinite(st) && st > 0 ? clamp(Math.round(st * 10) / 10, 0.1, 60) : settings.still;
   settings.loop = isFinite(lp) && lp >= 1 ? clamp(lp, 1, 99) : settings.loop;
   settings.lmUrl = lmBaseOf($('#setLmUrl').value); settings.lmModel = $('#setLmModel').value.trim(); settings.vocab = $('#setVocab').value.trim();
+  settings.noThink = $('#setNoThink').checked; lmPrefillOK = lmSchemaOK = true;   // 設定を変えたら対応状況の判定をやり直す
   try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (_) {}
   $('#setDlg').hidden = true; toast('設定を保存しました');
 };
