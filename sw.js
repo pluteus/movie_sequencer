@@ -1,6 +1,6 @@
 'use strict';
-const CACHE = 'keyframe-map-v20';
-const ASSETS = ['./', './index.html', './about.html', './screenshot.jpg', './manifest.json'];
+const CACHE = 'keyframe-map-v17';
+const ASSETS = ['./', './index.html', './about.html', './manifest.json'];
 
 self.addEventListener('install', e => {
   e.waitUntil(
