@@ -1708,12 +1708,26 @@ async function relinkFiles(files) {
   try { await relinkRun(files); } finally { relinking = false; }
 }
 /* メディア再リンクした動画につながっている矢印の前後のノードで、静止画が空のものは動画の先頭／最終フレームから生成する */
+/* 自動生成された静止画ノードかどうかの推定：ノード名の末尾が「先頭」「最終」、または画像名が *_first／*_last */
+const genKind = n => {
+  const nm = n.name || '', im = n.image || '';
+  if (/先頭\s*$/.test(nm) || /_first(_\d+)?\.[^.]+$/i.test(im)) return 'first';
+  if (/最終\s*$/.test(nm) || /_last(_\d+)?\.[^.]+$/i.test(im)) return 'last';
+  return null;
+};
+/* 静止画が空、または画像名はあるがファイルが未リンクで、自動生成と推定されるノード（先頭／最終の種別が合うもの）は再生成の対象 */
+const needFrame = (n, which) => {
+  if (!n.image) return true;
+  if (media.has(n.image)) return false;
+  const k = genKind(n);
+  return !!k && k === which;
+};
 async function fillEmptyFrames(names) {
   let cnt = 0;
   for (const a of arrows.slice()) {
     if (isFree(a) || !a.video || !names.has(a.video) || !media.has(a.video)) continue;
     const f = nodeById(a.from), t = nodeById(a.to);
-    const needF = !!f && !f.image, needT = !!t && !t.image;
+    const needF = !!f && needFrame(f, 'first'), needT = !!t && needFrame(t, 'last');
     if (!needF && !needT) continue;
     try {
       const fr = await extractFrames(a.video, needF && needT ? undefined : needF ? 'first' : 'last');
@@ -1789,7 +1803,7 @@ async function relinkRun(files) {
   if (rn) parts.push(`ハッシュ一致でファイル名を更新：${rn} 件`);
   if (serialN) parts.push(`同名で内容が異なるファイル ${serialN} 件に連番を付けて別々に保持`);
   if (newImgs.length) parts.push(`新規ノード ${newImgs.length} 件を追加`);
-  if (filled) parts.push(`空だった静止画 ${filled} 件を動画から生成`);
+  if (filled) parts.push(`空または未リンクの自動生成の静止画 ${filled} 件を動画から生成`);
   const addedVids = newVids.length - badVids;
   if (addedVids) parts.push(framed === addedVids
     ? `動画 ${framed} 件を追加（先頭・最終フレームのノードを自動生成して接続）`
