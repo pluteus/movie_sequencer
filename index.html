@@ -1368,6 +1368,7 @@ function onLong(g) {
         } },
       ...(isFree(o) ? [{ label: '🖼 前後の静止画ノードを自動生成', disabled: !(o.video && media.has(o.video)), fn: async () => { if (await autoFrames(o)) toast('前後の静止画ノードを生成して接続しました'); } }] : []),
       { label: '🏷 タグ・説明文を追加', fn: () => tagDescMenu(g.sx, g.sy, o) },
+      { label: '📋 前後のファイル名と動画プロンプトをコピー', disabled: !arrowPromptText(o), fn: () => copyText(arrowPromptText(o), '前後のファイル名と動画プロンプト') },
       { label: '📋 コピー (Ctrl+C)', disabled: !o.video, fn: () => copySel() },
       { label: '✂️ 切り取り (Ctrl+X)', disabled: !o.video, fn: cutSel },
       { label: '🗑 矢印を削除', fn: () => { arrows = arrows.filter(a => a !== o); clearSel(); updateConnUI(); save(); draw(); } }
@@ -2415,7 +2416,7 @@ async function lmTagOne(base, model, n, signal, vocab, existing) {
 }
 const strHash = t => { let h = 5381; for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 const descKeyOf = (model, n) => 'desc2|' + model + '|' + strHash(descPrompt()) + '|' + embKey(n);
-const mKey = (a, b) => 'P3:' + strHash(a + '||' + b);   // 矢印の説明文の索引（前後ノードの説明文が変わると別物になる）
+const mKey = (a, b) => 'P4:' + strHash(a + '||' + b);   // 矢印の説明文の索引（前後ノードの説明文が変わると別物になる）
 /* 選択中のノード（最大4つ）のタグ表示の下に、英語の説明文を表示する */
 const DESC_MAX_SEL = 4;
 const descBoxes = new Map();                 // 表示中の説明文ボックス（キー → 要素）。文字は変わったときだけ書き換える（選択範囲を保つため）
@@ -2425,8 +2426,13 @@ async function copyText(t, what) {
   catch (_) { const a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select(); try { document.execCommand('copy'); } catch (__) {} a.remove(); }
   toast((what || '説明文') + 'をコピーしました');
 }
-const fileStem = n => ((n && (n.image || n.name)) || '').replace(/\.[^./\\]+$/, '');
-const provName = a => { const f = fileStem(nodeById(a.from)), t = fileStem(nodeById(a.to)); return f && t ? f + '_' + t + '.mp4' : ''; };   // 動画が未指定の矢印の仮のファイル名：先頭フレーム_最終フレーム.mp4
+const fileOf = n => (n && (n.image || n.name)) || '';
+const provName = a => { const f = fileOf(nodeById(a.from)), t = fileOf(nodeById(a.to)); return f && t ? f + '_' + t + '.mp4' : ''; };   // 動画が未指定の矢印の仮のファイル名：先頭フレーム名.拡張子_最終フレーム名.拡張子.mp4
+function arrowPromptText(a) {                // 1行目：先頭フレームのファイル名、2行目：最終フレームのファイル名、3行目：矢印の説明文（動画プロンプト）
+  if (!a || isFree(a)) return null;
+  const f = nodeById(a.from), t = nodeById(a.to), fd = nodeDesc(f), td = nodeDesc(t), m = fd && td && descIdx.get(mKey(fd, td));
+  return m ? [fileOf(f), fileOf(t), m.replace(/\s*\n\s*/g, ' ').trim()].join('\n') : null;
+}
 function drawDescs() {                       // render の最後に呼ぶ：選択中のノード・矢印のファイル名と説明文を、キャンバスに合わせて配置する
   descLoad();
   const items = [];
@@ -2554,10 +2560,11 @@ async function lmMotion(base, model, fd, td, tags, signal) {
     (tags && tags.length ? 'Scene tags (they may hint at the setting; translate them to English if needed): ' + tags.join(', ') + '\n' : '') +
     'Write a prompt for a first-and-last-frame-to-video model with audio. The character moves from the first pose to the last pose, and the prompt also describes the sound.',
     'Rules:',
-    '- Output ONE English paragraph of 55 to 95 words. No labels except the "Sound:" part below, no bullet points, no quotes, no explanation.',
+    '- Output ONE paragraph of 60 to 110 words, written in English except for the Japanese dialogue line described below (not counted in the words). No labels except "Sound:" and "Dialogue:" below, no bullet points, no explanation.',
     (MOTION_CAM ? '- Start with the tag ' + MOTION_CAM + ', then continue in the same paragraph.\n' : '') + '- First describe the movement in present tense and chronological order: what moves first, what follows, with smooth natural motion verbs and gentle pacing words (slowly, smoothly, gradually). Finish the movement with the character settling into the pose of the last frame.',
     '- Describe only the character\'s own movement: body, head, gaze, expression, arms, hands, legs. Do not mention "first frame", "last frame", "image" or "description". Do not describe the background, clothing, colors or art style. Do not invent objects or props. No camera movement.',
-    '- Then add one sentence that starts with "Sound:". List the sound effects that this movement would make, in the order they happen (for example fabric rustling, soft footsteps, a hand brushing hair, light breathing, a small impact), then end with one ambient sound that fits the setting (use the scene tags when they help; otherwise a quiet indoor room tone). Only include sounds that the movement would physically cause. No music, no speech, no singing.',
+    '- Then add one sentence that starts with "Sound:". List the sound effects that this movement would make, in the order they happen (for example fabric rustling, soft footsteps, a hand brushing hair, light breathing, a small impact), then end with one ambient sound that fits the setting (use the scene tags when they help; otherwise a quiet indoor room tone). Only include sounds that the movement would physically cause. No music, no singing.',
+    '- Finally add one sentence that starts with "Dialogue:" containing ONE short line of Japanese speech (5 to 20 characters, written in natural spoken Japanese inside 「」) that the character would say with this expression, gesture and mood, followed by a brief English note on the voice (for example softly, cheerfully, in a whisper). Infer the line from the expression and the movement. Do not repeat the descriptions; the line must be a plausible utterance, not a narration.',
     ...vocabLines()
   ];
   const t = await lmChatText(base, model, 'You write concise, vivid motion-and-sound prompts for a first-and-last-frame-to-video generator with audio (MiniMax Hailuo style).', p.join('\n'), signal, 500);
