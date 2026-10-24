@@ -44,7 +44,7 @@
   #modeBtn,#arrBtn{min-width:44px;padding:0 10px;font-size:18px;line-height:1}
   .card{background:#23262f;border:1px solid #444a5c;border-radius:14px;padding:16px;width:min(340px,90vw);
     display:flex;flex-direction:column;gap:12px}
-  .card input{font:inherit;font-size:16px;color:var(--fg);background:var(--bg);border:1px solid #444a5c;
+  .card input,.card textarea{font:inherit;font-size:16px;color:var(--fg);background:var(--bg);border:1px solid #444a5c;
     border-radius:8px;padding:10px;width:100%;-webkit-user-select:text;user-select:text}
   .btns{display:flex;gap:8px;flex-wrap:wrap}
   .btns button{flex:1}
@@ -163,6 +163,10 @@
     <label>埋め込みモデルID（説明文の類似度ソート用・空なら自動選択）
       <input id="setLmEmb" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="例：text-embedding-nomic-embed-text-v1.5">
     </label>
+    <label>説明文の項目（1行に1項目。「項目名: (例・選択肢)」の形式。行の追加・削除・並べ替えができます）
+      <textarea id="setDescFmt" rows="8" spellcheck="false" autocapitalize="off" autocorrect="off" style="font-size:13px;line-height:1.4;resize:vertical;white-space:pre"></textarea>
+    </label>
+    <div class="btns"><button id="setDescFmtReset" type="button">↺ 説明文の項目を初期値に戻す</button></div>
     <label>タグの語彙（任意・カンマ区切り）
       <input id="setVocab" type="text" placeholder="空なら自由にタグを付ける">
     </label>
@@ -2457,17 +2461,17 @@ function descLoad() {
 function descSave() {
   try { const o = {}; [...descCache].slice(-800).forEach(([k, v]) => { o[k] = v; }); localStorage.setItem(DESC_KEY, JSON.stringify(o)); } catch (_) {}
 }
-const DESC_BASE = [
-  'Describe ONLY the pose and expression of the character in this image, in English, using exactly this format (one line each, short phrases, no extra text):',
+const DESC_FMT_DEFAULT = [
   'Body orientation: (front / three-quarter left / three-quarter right / left side / right side / back)',
   'Posture: (standing / sitting / kneeling / crouching / leaning forward / leaning back / lying ...)',
   'Head and gaze: (head tilt, facing direction, where the eyes look)',
   'Expression: (smiling / neutral / surprised / eyes closed / mouth open ...)',
   'Left arm and hand: (position and gesture, from the viewer\'s left)',
   'Right arm and hand: (position and gesture, from the viewer\'s right)',
-  'Legs: (stance, knees, feet)',
-  'Ignore the background, clothing design, colors and art style. Use the same wording for the same pose across images.'
-];
+  'Legs: (stance, knees, feet)'
+].join('\n');
+const descFmtList = t => String(t || '').split('\n').map(x => x.trim()).filter(Boolean).slice(0, 20);   // 設定の項目（1行1項目）
+const descFields = () => { const l = descFmtList(settings.descFmt); return l.length ? l : descFmtList(DESC_FMT_DEFAULT); };
 /* 設定のタグの語彙（優先）・ネガティブリスト（禁止）を説明文の指示に反映する。日本語の語は英訳した語で統一させる */
 function vocabLines() {
   const pos = lmList(settings.vocab), ng = lmList(settings.vocabNg), r = [];
@@ -2475,7 +2479,14 @@ function vocabLines() {
   if (ng.length) r.push('Forbidden words: ' + ng.join(', ') + '\nNever use these words or their English translations or close synonyms; describe it with other words.');
   return r;
 }
-function descPrompt() { const r = DESC_BASE.slice(); r.splice(r.length - 1, 0, ...vocabLines()); return r.join('\n'); }
+function descPrompt() {
+  return [
+    'Describe the character in this image, in English, using exactly the following fields (one line per field, in this order, short phrases, no extra text):',
+    ...descFields(),
+    ...vocabLines(),
+    'Unless a field above asks for it, ignore the background, clothing design, colors and art style. Use the same wording for the same pose across images.'
+  ].join('\n');
+}
 async function lmChatText(base, model, system, user, signal, maxTok) {   // テキストを返すチャット呼び出し（思考なし指定の自動切替つき）
   const post = pre => {
     const msgs = [{ role: 'system', content: system }, { role: 'user', content: user }];
@@ -2903,12 +2914,12 @@ $('#fsBtn').onclick = async () => {
 const player = $('#player'), pImg = $('#pImg'), pVid = $('#pVid'), pCap = $('#pCap');
 /* 設定（端末のブラウザに保存） */
 const SET_KEY = 'keyframe-map.settings.v1';
-const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
+const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', descFmt: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
 try {
   const o = JSON.parse(localStorage.getItem(SET_KEY) || '{}');
   if (isFinite(o.still) && o.still > 0) settings.still = clamp(+o.still, 0.1, 60);
   if (isFinite(o.loop) && o.loop >= 1) settings.loop = clamp(Math.round(+o.loop), 1, 99);
-  for (const k of ['lmUrl', 'lmModel', 'lmEmb', 'vocab', 'vocabNg']) if (typeof o[k] === 'string') settings[k] = o[k];
+  for (const k of ['lmUrl', 'lmModel', 'lmEmb', 'descFmt', 'vocab', 'vocabNg']) if (typeof o[k] === 'string') settings[k] = o[k];
   if (typeof o.noThink === 'boolean') settings.noThink = o.noThink;
   if (isFinite(o.tagMax) && o.tagMax >= 1) settings.tagMax = clamp(Math.round(+o.tagMax), 1, 20);
 } catch (_) {}
@@ -2917,16 +2928,19 @@ $('#setBtn').onclick = () => {
   $('#setStill').value = settings.still; $('#setLoop').value = settings.loop;
   $('#setLmUrl').value = settings.lmUrl; $('#setLmModel').value = settings.lmModel; $('#setLmEmb').value = settings.lmEmb; $('#setVocab').value = settings.vocab; $('#setNoThink').checked = settings.noThink;
   $('#setVocabNg').value = settings.vocabNg; $('#setTagMax').value = settings.tagMax;
+  $('#setDescFmt').value = descFields().join('\n');
   $('#setDlg').hidden = false;
 };
 $('#setCancel').onclick = () => { $('#setDlg').hidden = true; };
 $('#setLmTest').onclick = lmTest;
+$('#setDescFmtReset').onclick = () => { $('#setDescFmt').value = DESC_FMT_DEFAULT; };
 $('#setOk').onclick = () => {
   const st = parseFloat($('#setStill').value), lp = parseInt($('#setLoop').value, 10);
   settings.still = isFinite(st) && st > 0 ? clamp(Math.round(st * 10) / 10, 0.1, 60) : settings.still;
   settings.loop = isFinite(lp) && lp >= 1 ? clamp(lp, 1, 99) : settings.loop;
   settings.lmUrl = lmBaseOf($('#setLmUrl').value); settings.lmModel = $('#setLmModel').value.trim(); settings.lmEmb = $('#setLmEmb').value.trim(); settings.vocab = $('#setVocab').value.trim();
   settings.vocabNg = $('#setVocabNg').value.trim(); settings.tagMax = clamp(parseInt($('#setTagMax').value, 10) || 8, 1, 20);
+  { const l = descFmtList($('#setDescFmt').value).join('\n'); settings.descFmt = l === DESC_FMT_DEFAULT ? '' : l; }   // 初期値のままなら空にして、今後の初期値の変更に追従する
   settings.noThink = $('#setNoThink').checked; lmPrefillOK = lmSchemaOK = true;   // 設定を変えたら対応状況の判定をやり直す
   try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (_) {}
   $('#setDlg').hidden = true; toast('設定を保存しました');
