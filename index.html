@@ -171,6 +171,7 @@
     <label>説明文の項目（1行に1項目。「項目名: (例・選択肢)」の形式。行の追加・削除・並べ替えができます）
       <textarea id="setDescFmt" rows="8" spellcheck="false" autocapitalize="off" autocorrect="off" style="font-size:13px;line-height:1.4;resize:vertical;white-space:pre"></textarea>
     </label>
+    <label style="flex-direction:row;align-items:center;gap:8px"><input id="setUpscaled" type="checkbox" style="width:auto;padding:0"><span>動画の仮のファイル名に「_upscaled」を付ける</span></label>
     <div class="btns"><button id="setDescFmtReset" type="button">↺ 説明文の項目を初期値に戻す</button></div>
     <label>タグの語彙（任意・カンマ区切り）
       <input id="setVocab" type="text" placeholder="空なら自由にタグを付ける">
@@ -2427,7 +2428,7 @@ async function copyText(t, what) {
   toast((what || '説明文') + 'をコピーしました');
 }
 const fileOf = n => (n && (n.image || n.name)) || '';
-const provName = a => { const f = fileOf(nodeById(a.from)), t = fileOf(nodeById(a.to)); return f && t ? f + '_' + t + '_upscaled_00001-audio.mp4' : ''; };   // 動画が未指定の矢印の仮のファイル名：先頭フレーム名.拡張子_最終フレーム名.拡張子_upscaled_00001-audio.mp4
+const provName = a => { const f = fileOf(nodeById(a.from)), t = fileOf(nodeById(a.to)); return f && t ? f + '_' + t + (settings.upscaled ? '_upscaled' : '') + '_00001-audio.mp4' : ''; };   // 動画が未指定の矢印の仮のファイル名：先頭名.拡張子_最終名.拡張子[_upscaled]_00001-audio.mp4
 function arrowPromptText(a) {                // 1行目：先頭フレームのファイル名、2行目：最終フレームのファイル名、3行目：矢印の説明文（動画プロンプト）
   if (!a || isFree(a)) return null;
   const f = nodeById(a.from), t = nodeById(a.to), fd = nodeDesc(f), td = nodeDesc(t), m = fd && td && descIdx.get(mKey(fd, td));
@@ -3059,19 +3060,20 @@ $('#fsBtn').onclick = async () => {
 const player = $('#player'), pImg = $('#pImg'), pVid = $('#pVid'), pCap = $('#pCap');
 /* 設定（端末のブラウザに保存） */
 const SET_KEY = 'keyframe-map.settings.v1';
-const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', descFmt: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
+const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', descFmt: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true, upscaled: true };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
 try {
   const o = JSON.parse(localStorage.getItem(SET_KEY) || '{}');
   if (isFinite(o.still) && o.still > 0) settings.still = clamp(+o.still, 0.1, 60);
   if (isFinite(o.loop) && o.loop >= 1) settings.loop = clamp(Math.round(+o.loop), 1, 99);
   for (const k of ['lmUrl', 'lmModel', 'lmEmb', 'descFmt', 'vocab', 'vocabNg']) if (typeof o[k] === 'string') settings[k] = o[k];
   if (typeof o.noThink === 'boolean') settings.noThink = o.noThink;
+  if (typeof o.upscaled === 'boolean') settings.upscaled = o.upscaled;
   if (isFinite(o.tagMax) && o.tagMax >= 1) settings.tagMax = clamp(Math.round(+o.tagMax), 1, 20);
 } catch (_) {}
 $('#setBtn').onclick = () => {
   closePopups();
   $('#setStill').value = settings.still; $('#setLoop').value = settings.loop;
-  $('#setLmUrl').value = settings.lmUrl; $('#setLmModel').value = settings.lmModel; $('#setLmEmb').value = settings.lmEmb; $('#setVocab').value = settings.vocab; $('#setNoThink').checked = settings.noThink;
+  $('#setLmUrl').value = settings.lmUrl; $('#setLmModel').value = settings.lmModel; $('#setLmEmb').value = settings.lmEmb; $('#setVocab').value = settings.vocab; $('#setNoThink').checked = settings.noThink; $('#setUpscaled').checked = settings.upscaled;
   $('#setVocabNg').value = settings.vocabNg; $('#setTagMax').value = settings.tagMax;
   $('#setDescFmt').value = descFields().join('\n');
   $('#setDlg').hidden = false;
@@ -3086,6 +3088,7 @@ $('#setOk').onclick = () => {
   settings.lmUrl = lmBaseOf($('#setLmUrl').value); settings.lmModel = $('#setLmModel').value.trim(); settings.lmEmb = $('#setLmEmb').value.trim(); settings.vocab = $('#setVocab').value.trim();
   settings.vocabNg = $('#setVocabNg').value.trim(); settings.tagMax = clamp(parseInt($('#setTagMax').value, 10) || 8, 1, 20);
   { const l = descFmtList($('#setDescFmt').value).join('\n'); settings.descFmt = l === DESC_FMT_DEFAULT ? '' : l; }   // 初期値のままなら空にして、今後の初期値の変更に追従する
+  settings.upscaled = $('#setUpscaled').checked;
   settings.noThink = $('#setNoThink').checked; lmPrefillOK = lmSchemaOK = true;   // 設定を変えたら対応状況の判定をやり直す
   try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (_) {}
   $('#setDlg').hidden = true; toast('設定を保存しました');
