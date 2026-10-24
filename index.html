@@ -156,7 +156,13 @@
     <label>タグの語彙（任意・カンマ区切り）
       <input id="setVocab" type="text" placeholder="空なら自由にタグを付ける">
     </label>
-    <div class="hint">語彙を入れると、その中からだけタグを選びます（表記ゆれを防げます）。画像は上のURLのサーバーにだけ送られます。</div>
+    <label>タグの語彙（ネガティブリスト・カンマ区切り）
+      <input id="setVocabNg" type="text" placeholder="使わせないタグ（例：キャラクター、女の子）">
+    </label>
+    <label>タグの最大数（1画像あたり）
+      <input id="setTagMax" type="number" min="1" max="20" step="1" inputmode="numeric">
+    </label>
+    <div class="hint">語彙を入れると、その中からだけタグを選びます（表記ゆれを防げます）。ネガティブリストのタグは使わせず、返ってきても除外します（全画像に共通するタグなどを外せます）。画像は上のURLのサーバーにだけ送られます。</div>
     <label style="flex-direction:row;align-items:center;gap:8px"><input id="setNoThink" type="checkbox" style="width:auto;padding:0"><span>思考を飛ばす（空の thinking を返答の先頭に入れる）</span></label>
     <div class="btns"><button id="setLmTest">🔌 接続テスト</button></div>
     <div class="btns">
@@ -2308,6 +2314,9 @@ async function lmTest() {                    // 設定ダイアログの「接�
     toast(ids.length ? `接続できました（${base}）。モデル：${ids.slice(0, 6).join('、')}${ids.length > 6 ? ' ほか' : ''}` : '接続できましたが、モデルが見つかりません');
   } catch (e) { toast(e.message); }
 }
+const lmList = s => cleanTags((s || '').split(/[,，、\n]/));
+const lmNorm = t => String(t).normalize('NFKC').toLowerCase();   // 全角・半角、大文字・小文字を区別しない
+const lmMax = () => clamp(Math.round(+settings.tagMax) || 8, 1, 20);
 const lmText = j => {                       // content が空で reasoning_content に結果が入るモデルにも対応
   const m = (j && j.choices && j.choices[0] && j.choices[0].message) || {};
   const t = (m.content || '').trim() ? m.content : (m.reasoning_content || m.reasoning || '');
@@ -2315,18 +2324,24 @@ const lmText = j => {                       // content が空で reasoning_conte
 };
 const NO_THINK = '<think>\n\n</think>\n\n';   // 空の thinking ブロック（返答の先頭に入れて思考を飛ばす）
 async function lmTagOne(base, model, n, signal, vocab, existing) {
+  const ngList = lmList(settings.vocabNg), ngSet = new Set(ngList.map(lmNorm)), isNg = t => ngSet.has(lmNorm(t));
+  const max = lmMax(), vocabOn = vocab.length > 0;
+  vocab = vocab.filter(t => !isNg(t));
+  if (vocabOn && !vocab.length) throw new Error('タグの語彙がすべてネガティブリストに含まれています');
+  existing = existing.filter(t => !isNg(t));
   const el = await loadImgEl(n.image);
   if (!el || !el.naturalWidth) throw new Error('画像を読み込めません');
   const url = cropCanvas(el, analyzeImage(el), 512).toDataURL('image/jpeg', 0.85);   // キャラクター部分を切り出して縮小
   const rules = [
-    'このキャラクター画像の「ポーズ・表情・向き・動作」を表す短い日本語のタグを3〜8個付けてください。',
+    `このキャラクター画像の「ポーズ・表情・向き・動作」を表す短い日本語のタグを${max <= 3 ? max + '個以内で' : '3〜' + max + '個'}付けてください。`,
     '・背景や画風ではなく、キャラクターの状態の違いが分かるタグにする（例：立ち、座り、右向き、正面、笑顔、目を閉じる、手を振る）',
     '・1つのタグは10文字以内の名詞や短い句にし、同じ意味のタグは表記を統一する'
   ];
   if (existing.length) rules.push('・既存のタグ：' + existing.join('、') + '\n　意味が合うものは必ず再利用し、足りないときだけ新しいタグを作る');
   if (vocab.length) rules.push('・次のリストの中からだけ選ぶ：' + vocab.join('、'));
+  if (ngList.length) rules.push('・次のタグは使わない：' + ngList.join('、'));
   rules.push('出力は {"tags":["…","…"]} のJSONのみ。');
-  const schema = { type: 'object', properties: { tags: { type: 'array', maxItems: 8, items: vocab.length ? { type: 'string', enum: vocab } : { type: 'string' } } }, required: ['tags'] };
+  const schema = { type: 'object', properties: { tags: { type: 'array', maxItems: max, items: vocab.length ? { type: 'string', enum: vocab } : { type: 'string' } } }, required: ['tags'] };
   const post = async (withSchema, withPrefill) => {
     const body = { model, temperature: 0.2, max_tokens: 800, stream: false,
       messages: [
@@ -2354,7 +2369,7 @@ async function lmTagOne(base, model, n, signal, vocab, existing) {
   try { const m = txt.match(/\{[\s\S]*\}/); tags = JSON.parse(m ? m[0] : txt).tags; } catch (_) { tags = txt.split(/[,，、\n]/); }
   tags = cleanTags((Array.isArray(tags) ? tags : []).map(t => String(t).replace(/^[#\-\s"'「」]+|["'「」\s]+$/g, '').slice(0, 20)));
   if (vocab.length) tags = tags.filter(t => vocab.includes(t));
-  return tags.slice(0, 8);
+  return tags.filter(t => !isNg(t)).slice(0, max);
 }
 async function autoTagLM() {
   if (tagging) { if (confirm('タグ付けを中止しますか？')) tagging.abort(); return; }
@@ -2367,7 +2382,7 @@ async function autoTagLM() {
   const base = lmBaseOf(settings.lmUrl);
   if (!confirm(`${list.length} 件の画像を ${base} に送ってタグ付けします。よろしいですか？`)) return;
   const ac = new AbortController(); tagging = ac;
-  const vocab = cleanTags((settings.vocab || '').split(/[,，、\n]/));
+  const vocab = lmList(settings.vocab);
   let ok = 0, fail = 0, firstErr = '';
   try {
     const model = await lmModelId(base, ac.signal);
@@ -2675,18 +2690,20 @@ $('#fsBtn').onclick = async () => {
 const player = $('#player'), pImg = $('#pImg'), pVid = $('#pVid'), pCap = $('#pCap');
 /* 設定（端末のブラウザに保存） */
 const SET_KEY = 'keyframe-map.settings.v1';
-const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', vocab: '', noThink: true };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
+const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
 try {
   const o = JSON.parse(localStorage.getItem(SET_KEY) || '{}');
   if (isFinite(o.still) && o.still > 0) settings.still = clamp(+o.still, 0.1, 60);
   if (isFinite(o.loop) && o.loop >= 1) settings.loop = clamp(Math.round(+o.loop), 1, 99);
-  for (const k of ['lmUrl', 'lmModel', 'vocab']) if (typeof o[k] === 'string') settings[k] = o[k];
+  for (const k of ['lmUrl', 'lmModel', 'vocab', 'vocabNg']) if (typeof o[k] === 'string') settings[k] = o[k];
   if (typeof o.noThink === 'boolean') settings.noThink = o.noThink;
+  if (isFinite(o.tagMax) && o.tagMax >= 1) settings.tagMax = clamp(Math.round(+o.tagMax), 1, 20);
 } catch (_) {}
 $('#setBtn').onclick = () => {
   closePopups();
   $('#setStill').value = settings.still; $('#setLoop').value = settings.loop;
   $('#setLmUrl').value = settings.lmUrl; $('#setLmModel').value = settings.lmModel; $('#setVocab').value = settings.vocab; $('#setNoThink').checked = settings.noThink;
+  $('#setVocabNg').value = settings.vocabNg; $('#setTagMax').value = settings.tagMax;
   $('#setDlg').hidden = false;
 };
 $('#setCancel').onclick = () => { $('#setDlg').hidden = true; };
@@ -2696,6 +2713,7 @@ $('#setOk').onclick = () => {
   settings.still = isFinite(st) && st > 0 ? clamp(Math.round(st * 10) / 10, 0.1, 60) : settings.still;
   settings.loop = isFinite(lp) && lp >= 1 ? clamp(lp, 1, 99) : settings.loop;
   settings.lmUrl = lmBaseOf($('#setLmUrl').value); settings.lmModel = $('#setLmModel').value.trim(); settings.vocab = $('#setVocab').value.trim();
+  settings.vocabNg = $('#setVocabNg').value.trim(); settings.tagMax = clamp(parseInt($('#setTagMax').value, 10) || 8, 1, 20);
   settings.noThink = $('#setNoThink').checked; lmPrefillOK = lmSchemaOK = true;   // 設定を変えたら対応状況の判定をやり直す
   try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (_) {}
   $('#setDlg').hidden = true; toast('設定を保存しました');
