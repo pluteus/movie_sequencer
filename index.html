@@ -55,6 +55,8 @@
     overflow-wrap:anywhere;-webkit-user-select:text;user-select:text;cursor:text;-webkit-touch-callout:default}
   .dbox .dcopy{position:absolute;top:2px;right:4px;font:10px sans-serif;padding:1px 8px;border-radius:4px;border:1px solid #ffb84d;
     background:transparent;color:#ffb84d;cursor:pointer;-webkit-user-select:none;user-select:none}
+  .dbox .dtxt{outline:none;min-height:14px}
+  .dbox .dtxt:focus{background:rgba(255,184,77,.10);border-radius:3px}
   #toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);
     background:#000c;color:#fff;padding:10px 16px;border-radius:20px;font-size:13px;z-index:90;
     pointer-events:none;opacity:0;transition:opacity .2s;max-width:90vw;text-align:center}
@@ -1613,7 +1615,7 @@ function selectAll() {                       // Ctrl+A：ノードと未リン�
   if (!nodes.length && !fr.length) return;
   if (mode !== 'layout') setMode('layout');
   sel.nodes = nodes.map(n => n.id); sel.arrow = null; sel.garrows = fr.map(a => a.id); sel.grp = true;
-  updateConnUI(); draw();
+  centerOnNodes(); updateConnUI(); draw();
   toast(`ノード ${sel.nodes.length} 件・未リンクの矢印 ${sel.garrows.length} 本を選択`);
 }
 function pointerEnd(e) {
@@ -1886,6 +1888,7 @@ async function relinkRun(files) {
     clearSel(); updateConnUI();
   }
   const filled = await fillEmptyFrames(new Set(plan.map(p => p.name)));   // リンク済みの矢印に一致した動画でも、前後の静止画が空なら生成
+  centerOnNodes();                           // 再リンクの完了時に、全ノードの中心へスクロール
   save(); draw();
   const m = missingMedia();
   const parts = [m ? `リンク完了（未リンク ${m} 件）` : 'すべてのメディアをリンクしました'];
@@ -2424,12 +2427,12 @@ function drawDescs() {                       // render の最後に呼ぶ：選�
   const items = [];
   if (sel.nodes.length && sel.nodes.length <= DESC_MAX_SEL) sel.nodes.forEach(id => {
     const n = nodeById(id), txt = nodeDesc(n); if (!txt) return;
-    const an = tagAnchor(n); items.push({ k: 'n' + id, cx: an.cx, top: an.top + tagH(n) + 4, W: Math.max(box(n).w + 40, 230), txt });
+    const an = tagAnchor(n); items.push({ k: 'n' + id, idx: embKey(n), cx: an.cx, top: an.top + tagH(n) + 4, W: Math.max(box(n).w + 40, 230), txt });
   });
   const a = sel.arrow && arrowById(sel.arrow);   // 矢印：前後のノードの説明文から作った、動画生成用のプロンプト
   if (a && !isFree(a)) {
     const fd = nodeDesc(nodeById(a.from)), td = nodeDesc(nodeById(a.to)), txt = fd && td && descIdx.get(mKey(fd, td));
-    const an = txt && tagAnchor(a); if (an) items.push({ k: 'a' + a.id, cx: an.cx, top: an.top + tagH(a) + 4, W: 300, txt });
+    const an = txt && tagAnchor(a); if (an) items.push({ k: 'a' + a.id, idx: mKey(fd, td), cx: an.cx, top: an.top + tagH(a) + 4, W: 300, txt });
   }
   const layer = $('#descLayer'), live = new Set();
   items.forEach(it => {
@@ -2438,25 +2441,43 @@ function drawDescs() {                       // render の最後に呼ぶ：選�
     if (!el) {
       el = document.createElement('div'); el.className = 'dbox';
       const b = document.createElement('button'); b.className = 'dcopy'; b.textContent = 'コピー';
-      b.onclick = () => copyText(el.dataset.txt);
-      el.append(b, document.createTextNode('')); layer.appendChild(el); descBoxes.set(it.k, el);
+      const t = document.createElement('div'); t.className = 'dtxt'; t.spellcheck = false;
+      t.contentEditable = 'plaintext-only'; if (t.contentEditable !== 'plaintext-only') t.contentEditable = 'true';
+      b.onclick = () => copyText(t.innerText.trim());
+      t.onblur = () => commitDesc(el, t);                 // 編集は、フォーカスが外れたときに確定して保存する
+      t.onkeydown = e => { if (e.key === 'Escape') { t.textContent = el.dataset.txt; t.blur(); } };   // Esc：編集を取り消す
+      t.onpaste = e => { e.preventDefault(); document.execCommand('insertText', false, (e.clipboardData || window.clipboardData).getData('text')); };
+      el.append(b, t); layer.appendChild(el); descBoxes.set(it.k, el);
     }
-    if (el.dataset.txt !== it.txt) { el.dataset.txt = it.txt; el.lastChild.nodeValue = it.txt; }
+    el.dataset.idx = it.idx;
+    const t = el.lastChild;
+    if (el.dataset.txt !== it.txt && document.activeElement !== t) { el.dataset.txt = it.txt; t.textContent = it.txt; }
     el.style.width = it.W + 'px';
     el.style.transform = `translate(${view.x + (it.cx - it.W / 2) * view.s}px,${view.y + it.top * view.s}px) scale(${view.s})`;
   });
-  for (const [k, el] of descBoxes) if (!live.has(k)) { el.remove(); descBoxes.delete(k); }
+  for (const [k, el] of descBoxes) if (!live.has(k) && document.activeElement !== el.lastChild) { el.remove(); descBoxes.delete(k); }
+}
+function commitDesc(el, t) {                 // 手で直した説明文を保存する（空にした場合は元に戻す）
+  const v = t.innerText.replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim(), old = el.dataset.txt, idx = el.dataset.idx;
+  if (!v) { t.textContent = old; return; }
+  if (v === old) return;
+  const prev = descKeyIdx.get(idx), model = prev ? prev.split('|')[1] : (settings.lmModel || 'manual');
+  descPut('desc2|' + model + '|' + strHash(descPrompt()) + '|' + idx, idx, v); descSave();
+  el.dataset.txt = v; t.textContent = v;
+  toast('説明文を修正しました'); draw();
 }
 /* ---------- LM Studio：英語の説明文 → テキスト埋め込みによる画像の類似度 ---------- */
 /* VLM に各画像のポーズ・表情などを固定の書式の英語で説明させ、埋め込みモデル（/v1/embeddings）でベクトル化する。
    説明文は画像ごとにキャッシュ（localStorage）するので、2回目以降は埋め込みの計算だけになる */
 const DESC_KEY = 'keyframe-map.desc.v1', descCache = new Map();
 let descReady = false;
+const descKeyIdx = new Map();                 // 索引 → 保存先のキー（説明文を手で直したときの保存に使う）
 const descIdx = new Map();                    // 画像の埋め込みキー → 説明文（選択したノードに表示する用）
 const descKeyImg = k => k.split('|').slice(3).join('|');   // キー＝desc2|モデル|語彙のハッシュ|画像のキー
+function descPut(key, idx, txt) { descCache.set(key, txt); descIdx.set(idx, txt); descKeyIdx.set(idx, key); }
 function descLoad() {
   if (descReady) return; descReady = true;
-  try { const o = JSON.parse(lsGet(DESC_KEY) || '{}'); for (const k in o) if (k.startsWith('desc2|')) { descCache.set(k, o[k]); descIdx.set(descKeyImg(k), o[k]); } } catch (_) {}
+  try { const o = JSON.parse(lsGet(DESC_KEY) || '{}'); for (const k in o) if (k.startsWith('desc2|')) { descPut(k, descKeyImg(k), o[k]); } } catch (_) {}
 }
 function descSave() {
   try { const o = {}; [...descCache].slice(-800).forEach(([k, v]) => { o[k] = v; }); localStorage.setItem(DESC_KEY, JSON.stringify(o)); } catch (_) {}
@@ -2543,7 +2564,7 @@ async function lmDescEmbs(list, signal) {      // list の各ノードの説明�
   for (let i = 0; i < need.length; i++) {
     toast(`説明文を生成中… ${i + 1}/${need.length}（${model}）`);
     const d = await lmDescribe(base, model, need[i], signal);
-    descCache.set(keyOf(need[i]), d); descIdx.set(embKey(need[i]), d);
+    descPut(keyOf(need[i]), embKey(need[i]), d);
     draw();
     if ((i & 7) === 7) descSave();
   }
@@ -2571,7 +2592,7 @@ async function descNodeLM(n) {               // ノード：LM Studio で英語�
     const base = lmBaseOf(settings.lmUrl), model = await lmModelId(base);
     toast(`説明文を生成中…（${model}）`);
     const d = await lmDescribe(base, model, n);
-    descCache.set(descKeyOf(model, n), d); descIdx.set(embKey(n), d); descSave();
+    descPut(descKeyOf(model, n), embKey(n), d); descSave();
     draw(); toast('説明文を追加しました（ノードを選択すると表示されます）');
   } catch (e) { toast(e.message); } finally { lmBusy = false; }
 }
@@ -2585,13 +2606,13 @@ async function descArrowLM(a) {              // 矢印：前後のノードの�
     const base = lmBaseOf(settings.lmUrl), model = await lmModelId(base);
     const get = async n => {                 // 説明文がなければ先にノードの説明文を生成する
       let d = descCache.get(descKeyOf(model, n)) || descIdx.get(embKey(n));
-      if (!d) { toast(`ノード「${n.name}」の説明文を生成中…`); d = await lmDescribe(base, model, n); descCache.set(descKeyOf(model, n), d); descIdx.set(embKey(n), d); }
+      if (!d) { toast(`ノード「${n.name}」の説明文を生成中…`); d = await lmDescribe(base, model, n); descPut(descKeyOf(model, n), embKey(n), d); }
       return d;
     };
     const fd = await get(f), td = await get(t);
     toast(`動きを推測中…（${model}）`);
     const m = await lmMotion(base, model, fd, td);
-    descCache.set('desc2|' + model + '|' + strHash(descPrompt()) + '|' + mKey(fd, td), m); descIdx.set(mKey(fd, td), m); descSave();
+    descPut('desc2|' + model + '|' + strHash(descPrompt()) + '|' + mKey(fd, td), mKey(fd, td), m); descSave();
     draw(); toast('説明文を追加しました（矢印を選択すると表示されます）');
   } catch (e) { toast(e.message); } finally { lmBusy = false; }
 }
@@ -2814,6 +2835,14 @@ function placeFreeArrows() {                 // 未リンクの矢印は、ノ�
     a.ux = cx + a.vw / 2; a.uy = top + a.vh / 2;
     cx += a.vw + 50; rowH = Math.max(rowH, a.vh + 50 + tagH(a));
   }
+}
+function centerOnNodes() {                   // 全ノードの中心が画面の中心に来るよう、拡大率はそのままスクロールする
+  const pts = nodes.map(n => ({ x: n.x, y: n.y }));
+  if (!pts.length) arrows.forEach(a => { if (isFree(a) && a.video) pts.push({ x: a.ux, y: a.uy }); });
+  if (!pts.length) return;
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  view.x = W / 2 - (Math.min(...xs) + Math.max(...xs)) / 2 * view.s;
+  view.y = (H + 60) / 2 - (Math.min(...ys) + Math.max(...ys)) / 2 * view.s;
 }
 function fitView() {                         // 全体が画面に収まるように表示を合わせる
   const bb = contentBox(false); if (!bb) return;
