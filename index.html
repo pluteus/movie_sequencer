@@ -1092,7 +1092,7 @@ $('#arrBtn').onclick = e => {
     { label: '🏷 タグの類似度でソート', fn: () => arrange('tag') },
     { label: '🖼 画像の類似度でソート', fn: () => arrange('image') },
     { label: '🖼 画像の類似度でソート（LM Studio・英語の説明文）', fn: () => arrange('imageLM') },
-    { label: tagging ? '⏹ タグ付けを中止' : '🤖 画像にタグ付け（LM Studio）', fn: autoTagLM }
+    { label: tagging ? '⏹ タグ付けを中止' : '🤖 画像にタグ付け（LM Studio）', fn: () => autoTagLM() }
   ]);
 };
 $('#fileBtn').onclick = e => {
@@ -1126,6 +1126,18 @@ function tagAddMenu(x, y, targets) {
     { label: '✏️ 任意のタグ', fn: () => askTag(targets) },
     ...(tags.length ? tags.map(t => ({ label: '🏷 ' + t, fn: () => tagToast(addTags(targets, [t]), t, '追加') }))
       : [{ label: '（設定済みのタグはありません）', disabled: true, fn: () => {} }])
+  ]);
+}
+function tagDescMenu(x, y, o) {              // ノード・矢印のサブメニュー「タグ・説明文を追加」
+  const has = n => n && n.image && media.has(n.image), node = !isArrowObj(o);
+  showPopup(x, y, [
+    { label: '🏷 タグを追加', fn: () => tagAddMenu(x, y, [o]) },
+    ...(node ? [
+      { label: tagging ? '⏹ タグ付けを中止' : '🤖 LM Studioでタグ付け', disabled: !tagging && !has(o), fn: () => autoTagLM(o) },
+      { label: '📝 LM Studioで説明文を追加', disabled: !has(o), fn: () => descNodeLM(o) }
+    ] : [
+      { label: '📝 LM Studioで説明文を追加（前後の静止画から動きを推測）', disabled: isFree(o) || !(has(nodeById(o.from)) && has(nodeById(o.to))), fn: () => descArrowLM(o) }
+    ])
   ]);
 }
 function tagDelMenu(x, y, targets) {         // 選択範囲に設定されているタグのリスト
@@ -1322,7 +1334,7 @@ function onLong(g) {
       { label: '⏭ 直後の動画の先頭フレームから生成', disabled: !nexts.length, fn: () => genFrame(o, nexts, 'first', g.sx, g.sy) },
       { label: 'ファイル解除', disabled: !o.image, fn: () => { o.image = null; o.imageHash = null; save(); draw(); } },
       { label: '✏️ 名前を変更', fn: () => { const t = prompt('ノード名', o.name); if (t !== null) { o.name = t.trim() || o.name; save(); draw(); } } },
-      ...(mode === 'layout' ? [{ label: '🏷 タグを追加', fn: () => tagAddMenu(g.sx, g.sy, [o]) }] : []),
+      { label: '🏷 タグ・説明文を追加', fn: () => tagDescMenu(g.sx, g.sy, o) },
       { label: '📋 コピー (Ctrl+C)', fn: () => copySel() },
       { label: '✂️ 切り取り (Ctrl+X)', fn: cutSel },
       { label: '🗑 ノードを削除', fn: () => deleteNode(o) }
@@ -1339,7 +1351,7 @@ function onLong(g) {
           save(); draw();
         } },
       ...(isFree(o) ? [{ label: '🖼 前後の静止画ノードを自動生成', disabled: !(o.video && media.has(o.video)), fn: async () => { if (await autoFrames(o)) toast('前後の静止画ノードを生成して接続しました'); } }] : []),
-      ...(mode === 'layout' ? [{ label: '🏷 タグを追加', fn: () => tagAddMenu(g.sx, g.sy, [o]) }] : []),
+      { label: '🏷 タグ・説明文を追加', fn: () => tagDescMenu(g.sx, g.sy, o) },
       { label: '📋 コピー (Ctrl+C)', disabled: !o.video, fn: () => copySel() },
       { label: '✂️ 切り取り (Ctrl+X)', disabled: !o.video, fn: cutSel },
       { label: '🗑 矢印を削除', fn: () => { arrows = arrows.filter(a => a !== o); clearSel(); updateConnUI(); save(); draw(); } }
@@ -2384,32 +2396,42 @@ async function lmTagOne(base, model, n, signal, vocab, existing) {
   if (vocab.length) tags = tags.filter(t => vocab.includes(t));
   return tags.filter(t => !isNg(t)).slice(0, max);
 }
+const strHash = t => { let h = 5381; for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
+const descKeyOf = (model, n) => 'desc2|' + model + '|' + strHash(descPrompt()) + '|' + embKey(n);
+const mKey = (a, b) => 'M:' + strHash(a + '||' + b);   // 矢印の説明文の索引（前後ノードの説明文が変わると別物になる）
 /* 選択中のノード（最大4つ）のタグ表示の下に、英語の説明文を表示する */
 const DESC_MAX_SEL = 4;
-function drawDescs() {
-  if (!sel.nodes.length || sel.nodes.length > DESC_MAX_SEL) return;
-  descLoad();
-  sel.nodes.forEach(id => {
-    const n = nodeById(id); if (!n || !n.image || !media.has(n.image)) return;
-    const txt = descIdx.get(embKey(n)); if (!txt) return;
-    const b = box(n), an = tagAnchor(n), W = Math.max(b.w + 40, 230), PAD = 6, LH = 14;
-    ctx.save(); ctx.font = '11px sans-serif'; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
-    const lines = [];
-    txt.split('\n').forEach(par => {              // 折り返し（英語は単語単位）
-      let cur = '';
-      par.split(' ').forEach(w => {
-        const t = cur ? cur + ' ' + w : w;
-        if (cur && ctx.measureText(t).width > W - PAD * 2) { lines.push(cur); cur = w; } else cur = t;
-      });
-      lines.push(cur);
+function drawDescBox(cx, top, n, txt) {
+  const W = Math.max(n && n.image ? box(n).w + 40 : 0, 230), PAD = 6, LH = 14;
+  ctx.save(); ctx.font = '11px sans-serif'; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+  const lines = [];
+  txt.split('\n').forEach(par => {              // 折り返し（英語は単語単位）
+    let cur = '';
+    par.split(' ').forEach(w => {
+      const t = cur ? cur + ' ' + w : w;
+      if (cur && ctx.measureText(t).width > W - PAD * 2) { lines.push(cur); cur = w; } else cur = t;
     });
-    const x = an.cx - W / 2, y = an.top + tagH(n) + 4, h = lines.length * LH + PAD * 2;
-    ctx.fillStyle = 'rgba(27,29,36,.92)'; rr(x, y, W, h, 6); ctx.fill();
-    ctx.strokeStyle = '#ffb84d'; ctx.lineWidth = 1; ctx.stroke();
-    ctx.fillStyle = '#e8ecf4';
-    lines.forEach((l, i) => ctx.fillText(l, x + PAD, y + PAD + i * LH));
-    ctx.restore();
+    lines.push(cur);
   });
+  const x = cx - W / 2, h = lines.length * LH + PAD * 2;
+  ctx.fillStyle = 'rgba(27,29,36,.92)'; rr(x, top, W, h, 6); ctx.fill();
+  ctx.strokeStyle = '#ffb84d'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = '#e8ecf4';
+  lines.forEach((l, i) => ctx.fillText(l, x + PAD, top + PAD + i * LH));
+  ctx.restore();
+}
+const nodeDesc = n => (n && n.image && media.has(n.image)) ? descIdx.get(embKey(n)) : null;
+function drawDescs() {
+  descLoad();
+  if (sel.nodes.length && sel.nodes.length <= DESC_MAX_SEL) sel.nodes.forEach(id => {
+    const n = nodeById(id), txt = nodeDesc(n); if (!txt) return;
+    const an = tagAnchor(n); drawDescBox(an.cx, an.top + tagH(n) + 4, n, txt);
+  });
+  const a = sel.arrow && arrowById(sel.arrow);   // 矢印：前後のノードの説明文から推測した動きの説明
+  if (a && !isFree(a)) {
+    const fd = nodeDesc(nodeById(a.from)), td = nodeDesc(nodeById(a.to)), txt = fd && td && descIdx.get(mKey(fd, td));
+    const an = txt && tagAnchor(a); if (an) drawDescBox(an.cx, an.top + tagH(a) + 4, null, txt);
+  }
 }
 /* ---------- LM Studio：英語の説明文 → テキスト埋め込みによる画像の類似度 ---------- */
 /* VLM に各画像のポーズ・表情などを固定の書式の英語で説明させ、埋め込みモデル（/v1/embeddings）でベクトル化する。
@@ -2437,25 +2459,19 @@ const DESC_BASE = [
   'Ignore the background, clothing design, colors and art style. Use the same wording for the same pose across images.'
 ];
 /* 設定のタグの語彙（優先）・ネガティブリスト（禁止）を説明文の指示に反映する。日本語の語は英訳した語で統一させる */
-function descPrompt() {
-  const pos = lmList(settings.vocab), ng = lmList(settings.vocabNg), r = DESC_BASE.slice();
-  if (pos.length) r.splice(r.length - 1, 0, 'Preferred vocabulary: ' + pos.join(', ') + '\nWhenever one of these terms (translate it to English if it is not English) describes what you see, use it instead of a synonym. Use other words only when none of them fits.');
-  if (ng.length) r.splice(r.length - 1, 0, 'Forbidden words: ' + ng.join(', ') + '\nNever use these words or their English translations or close synonyms; describe the pose with other words.');
-  return r.join('\n');
+function vocabLines() {
+  const pos = lmList(settings.vocab), ng = lmList(settings.vocabNg), r = [];
+  if (pos.length) r.push('Preferred vocabulary: ' + pos.join(', ') + '\nWhenever one of these terms (translate it to English if it is not English) describes what you see, use it instead of a synonym. Use other words only when none of them fits.');
+  if (ng.length) r.push('Forbidden words: ' + ng.join(', ') + '\nNever use these words or their English translations or close synonyms; describe it with other words.');
+  return r;
 }
-const strHash = t => { let h = 5381; for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
-async function lmDescribe(base, model, n, signal) {
-  const el = await loadImgEl(n.image);
-  if (!el || !el.naturalWidth) throw new Error('画像を読み込めません');
-  const url = cropCanvas(el, analyzeImage(el), 512).toDataURL('image/jpeg', 0.85);
+function descPrompt() { const r = DESC_BASE.slice(); r.splice(r.length - 1, 0, ...vocabLines()); return r.join('\n'); }
+async function lmChatText(base, model, system, user, signal, maxTok) {   // テキストを返すチャット呼び出し（思考なし指定の自動切替つき）
   const post = pre => {
-    const msgs = [
-      { role: 'system', content: 'You are a precise annotator of character poses for animation keyframes.' },
-      { role: 'user', content: [{ type: 'text', text: descPrompt() }, { type: 'image_url', image_url: { url } }] }
-    ];
+    const msgs = [{ role: 'system', content: system }, { role: 'user', content: user }];
     if (pre) msgs.push({ role: 'assistant', content: NO_THINK });
     return lmFetch(base, '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, temperature: 0, max_tokens: 400, stream: false, messages: msgs }) }, 180000, signal);
+      body: JSON.stringify({ model, temperature: 0, max_tokens: maxTok || 400, stream: false, messages: msgs }) }, 180000, signal);
   };
   let pre = !!settings.noThink && lmPrefillOK, r = await post(pre);
   if (r.status === 400 && pre) { pre = false; lmPrefillOK = false; r = await post(false); }
@@ -2464,6 +2480,26 @@ async function lmDescribe(base, model, n, signal) {
   if (!txt && pre) { lmPrefillOK = false; r = await post(false); if (!r.ok) throw new Error(`HTTP ${r.status}`); txt = lmText(await lmJson(r)).trim(); }
   if (!txt) throw new Error('説明文が空でした');
   return txt.replace(/[*#`]/g, '').replace(/\n{2,}/g, '\n').slice(0, 1200);
+}
+async function lmDescribe(base, model, n, signal) {
+  const el = await loadImgEl(n.image);
+  if (!el || !el.naturalWidth) throw new Error('画像を読み込めません');
+  const url = cropCanvas(el, analyzeImage(el), 512).toDataURL('image/jpeg', 0.85);
+  return lmChatText(base, model, 'You are a precise annotator of character poses for animation keyframes.',
+    [{ type: 'text', text: descPrompt() }, { type: 'image_url', image_url: { url } }], signal, 400);
+}
+/* 矢印：前後の静止画ノードの説明文の違いから、動画の動きを推測する */
+async function lmMotion(base, model, fd, td, signal) {
+  const p = [
+    'Below are pose descriptions of the FIRST frame and the LAST frame of a short animation clip of one character.',
+    'FIRST FRAME:\n' + fd, 'LAST FRAME:\n' + td,
+    'Infer how the character moves from the first frame to the last frame, based only on the differences between the two descriptions. Answer in English using exactly this format (one line each, short phrases, no extra text):',
+    'Motion: (one short sentence summarizing the movement)',
+    'Head and gaze: (how it changes)', 'Arms and hands: (how they move)', 'Body and legs: (how they move)',
+    'Write "no change" for a part that stays the same. Do not invent objects or details that are not in the descriptions.',
+    ...vocabLines()
+  ];
+  return lmChatText(base, model, 'You are an animation director who describes motion between two keyframes.', p.join('\n'), signal, 400);
 }
 async function lmEmbModelId(base, signal) {    // 埋め込みモデルのIDが空なら、/models から埋め込み用らしきものを選ぶ
   if (settings.lmEmb) return settings.lmEmb;
@@ -2477,7 +2513,7 @@ async function lmEmbModelId(base, signal) {    // 埋め込みモデルのIDが�
 async function lmDescEmbs(list, signal) {      // list の各ノードの説明文を埋め込みにして返す
   descLoad();
   const base = lmBaseOf(settings.lmUrl), model = await lmModelId(base, signal), emb = await lmEmbModelId(base, signal);
-  const vh = strHash(descPrompt()), keyOf = n => 'desc2|' + model + '|' + vh + '|' + embKey(n);
+  const keyOf = n => descKeyOf(model, n);
   const need = list.filter(n => !descCache.has(keyOf(n)));
   for (let i = 0; i < need.length; i++) {
     toast(`説明文を生成中… ${i + 1}/${need.length}（${model}）`);
@@ -2500,12 +2536,46 @@ async function lmDescEmbs(list, signal) {      // list の各ノードの説明�
   }
   return out;
 }
-async function autoTagLM() {
+let lmBusy = false;
+async function descNodeLM(n) {               // ノード：LM Studio で英語の説明文を生成して保存する
+  if (lmBusy || tagging) return toast('LM Studioの処理中です');
+  if (!n.image || !media.has(n.image)) return toast('再リンク済みの画像がありません');
+  lmBusy = true; descLoad();
+  try {
+    if (hashJobs.size) await Promise.all([...hashJobs.values()]);
+    const base = lmBaseOf(settings.lmUrl), model = await lmModelId(base);
+    toast(`説明文を生成中…（${model}）`);
+    const d = await lmDescribe(base, model, n);
+    descCache.set(descKeyOf(model, n), d); descIdx.set(embKey(n), d); descSave();
+    draw(); toast('説明文を追加しました（ノードを選択すると表示されます）');
+  } catch (e) { toast(e.message); } finally { lmBusy = false; }
+}
+async function descArrowLM(a) {              // 矢印：前後のノードの説明文の変化から動きを推測して保存する
+  if (lmBusy || tagging) return toast('LM Studioの処理中です');
+  const f = nodeById(a.from), t = nodeById(a.to), ok = n => n && n.image && media.has(n.image);
+  if (!ok(f) || !ok(t)) return toast('前後の両方のノードに、再リンク済みの画像が必要です');
+  lmBusy = true; descLoad();
+  try {
+    if (hashJobs.size) await Promise.all([...hashJobs.values()]);
+    const base = lmBaseOf(settings.lmUrl), model = await lmModelId(base);
+    const get = async n => {                 // 説明文がなければ先にノードの説明文を生成する
+      let d = descCache.get(descKeyOf(model, n)) || descIdx.get(embKey(n));
+      if (!d) { toast(`ノード「${n.name}」の説明文を生成中…`); d = await lmDescribe(base, model, n); descCache.set(descKeyOf(model, n), d); descIdx.set(embKey(n), d); }
+      return d;
+    };
+    const fd = await get(f), td = await get(t);
+    toast(`動きを推測中…（${model}）`);
+    const m = await lmMotion(base, model, fd, td);
+    descCache.set('desc2|' + model + '|' + strHash(descPrompt()) + '|' + mKey(fd, td), m); descIdx.set(mKey(fd, td), m); descSave();
+    draw(); toast('説明文を追加しました（矢印を選択すると表示されます）');
+  } catch (e) { toast(e.message); } finally { lmBusy = false; }
+}
+async function autoTagLM(only) {
   if (tagging) { if (confirm('タグ付けを中止しますか？')) tagging.abort(); return; }
   closePopups();
   // 対象：ノードを選択中ならその画像ノード、なければタグのない画像ノードすべて
-  let list = sel.nodes.map(nodeById).filter(n => n && n.image && media.has(n.image));
-  const picked = sel.nodes.length > 0;
+  let list = only ? [only] : sel.nodes.map(nodeById).filter(n => n && n.image && media.has(n.image));
+  const picked = !!only || sel.nodes.length > 0;
   if (!picked) list = nodes.filter(n => n.image && media.has(n.image) && !(n.tags && n.tags.length));
   if (!list.length) return toast(picked ? '選択したノードに、再リンク済みの画像がありません' : 'タグのない画像ノードがありません（ノードを選択すると、選択分にタグを追加します）');
   const base = lmBaseOf(settings.lmUrl);
