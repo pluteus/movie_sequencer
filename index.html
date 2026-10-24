@@ -893,6 +893,7 @@ function connState() {
   const a = sel.arrow ? arrowById(sel.arrow) : null;
   if (a && !isFree(a)) return { kind: 'linked', a };
   if (sel.nodes.length === 2) return { kind: a ? 'free' : 'nodes', a };
+  if (sel.nodes.length === 1 && a && isFree(a)) return { kind: 'nodefree', a, node: nodeById(sel.nodes[0]) };   // 1ノード＋未リンクの矢印
   return { kind: 'none', a };
 }
 const reverseOf = x => arrows.find(y => y !== x && y.from === x.to && y.to === x.from) || null;
@@ -904,6 +905,10 @@ function updateConnUI() {
     const ba = reverseOf(st.a);              // 逆向きの矢印がすでにあれば「逆順」「両方」は不要
     bt.rev.disabled = !!ba; bt.both.disabled = !!ba; bt.del.disabled = false;
     bt.both.classList.toggle('on', !!ba);
+  } else if (st.kind === 'nodefree') {         // 1ノード＋未リンクの矢印：もう一方の端は動画の先頭／最終フレームから自動生成する
+    const ok = !!(st.a.video && media.has(st.a.video)) && !!st.node;
+    bt.fwd.disabled = bt.rev.disabled = bt.both.disabled = !ok;
+    bt.del.disabled = !(st.node && arrows.some(x => x.from === st.node.id || x.to === st.node.id));
   } else if (st.kind === 'nodes' || st.kind === 'free') {
     const { ab, ba } = pairArrows();
     if (st.kind === 'nodes') { bt.fwd.disabled = bt.rev.disabled = bt.both.disabled = false; }
@@ -919,6 +924,7 @@ function connect(dir) {
   const st = connState();
   if (st.kind === 'linked') return connectLinked(dir, st.a);
   if (st.kind === 'free') return attachFree(dir, st.a);
+  if (st.kind === 'nodefree') return attachFreeToNode(dir, st.a, st.node);
   if (sel.nodes.length !== 2) return;
   const [a, b] = sel.nodes;
   const { ab, ba } = pairArrows();
@@ -937,6 +943,34 @@ function connect(dir) {
   save(); updateConnUI(); draw();
 }
 /* 未リンクの矢印を、選択した2ノードの間につなぐ */
+/* 1ノード＋未リンクの矢印：選択ノードを矢印の始点（選択順）／終点（逆順）にし、もう一方の端は動画の最終／先頭フレームから静止画ノードを自動生成する。
+   両方：選択順の接続に加えて、逆向きの動画なしの矢印を追加する */
+async function attachFreeToNode(dir, u, node) {
+  if (!node || !u.video || !media.has(u.video)) return toast('動画が再リンクされていないため、静止画を生成できません');
+  if (u.framing) return;
+  const which = dir === 'rev' ? 'first' : 'last';
+  u.framing = true;
+  toast('フレームを生成中…');
+  try {
+    const fr = await extractFrames(u.video, which);
+    if (!arrowById(u.id) || !isFree(u) || !nodeById(node.id)) return;
+    const base = u.video.replace(/\.[^.]+$/, '');
+    const fn = registerFile(new File([fr[which]], uniqueName(base + '_' + which + '.png'), { type: 'image/png' }));
+    generated.add(fn);
+    const d = box(node).w / 2 + 80 + u.vw + 60;       // 動画プレビューがノードに重ならない間隔
+    const gn = { id: uid(), name: base + ' ' + (which === 'first' ? '先頭' : '最終'), x: node.x + (dir === 'rev' ? -d : d), y: node.y,
+      image: fn, imageHash: null, pw: 160, ph: 160 * fr.h / fr.w };
+    hashJobs.get(fn).then(h => { if (gn.image === fn) { gn.imageHash = h; save(); } });
+    nodes.push(gn);
+    if (dir === 'rev') { u.from = gn.id; u.to = node.id; } else { u.from = node.id; u.to = gn.id; }
+    u.rt = 'idle'; u.ux = u.uy = null;
+    if (dir === 'both') arrows.push(newArrow(u.to, u.from));
+    sel.nodes = []; sel.arrow = u.id; sel.garrows = []; sel.grp = false;
+    save(); updateConnUI(); draw();
+    toast('矢印をノードにつなぎ、' + (which === 'first' ? '先頭' : '最終') + 'フレームのノードを生成しました');
+  } catch (_) { toast('フレームを生成できませんでした'); }
+  finally { u.framing = false; }
+}
 function attachFree(dir, u) {
   const [a, b] = sel.nodes;
   const { ab, ba } = pairArrows();
@@ -970,6 +1004,11 @@ function disconnect() {
       toast('未リンクの矢印にしました');
     }
     save(); updateConnUI(); draw(); return;
+  }
+  if (st.kind === 'nodefree') {              // 選択ノードにつながる矢印をすべて外す（動画があれば未リンクの矢印に、なければ削除）
+    const r = detachArrows(arrows.filter(x => x.from === st.node.id || x.to === st.node.id));
+    if (sel.arrow && !arrowById(sel.arrow)) sel.arrow = null;
+    save(); updateConnUI(); draw(); toast(detachMsg(r)); return;
   }
   const { ab, ba } = pairArrows();
   if (!ab && !ba) return;
@@ -1273,6 +1312,7 @@ function onLong(g) {
           } else { o.video = null; o.videoHash = null; o.rt = 'idle'; }
           save(); draw();
         } },
+      ...(isFree(o) ? [{ label: '🖼 前後の静止画ノードを自動生成', disabled: !(o.video && media.has(o.video)), fn: async () => { if (await autoFrames(o)) toast('前後の静止画ノードを生成して接続しました'); } }] : []),
       ...(mode === 'layout' ? [{ label: '🏷 タグを追加', fn: () => tagAddMenu(g.sx, g.sy, [o]) }] : []),
       { label: '📋 コピー (Ctrl+C)', disabled: !o.video, fn: () => copySel() },
       { label: '✂️ 切り取り (Ctrl+X)', disabled: !o.video, fn: cutSel },
