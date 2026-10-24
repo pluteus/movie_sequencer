@@ -617,6 +617,7 @@ function render() {
   nodes.forEach(drawNode);
   arrows.forEach(drawVideo);
   arrows.forEach(a => { if (!a.video) drawTags(a); });   // 動画のない矢印は線の中間の下にタグを表示
+  drawDescs();
   drawGroupBox();
   ctx.restore();
 
@@ -2383,19 +2384,48 @@ async function lmTagOne(base, model, n, signal, vocab, existing) {
   if (vocab.length) tags = tags.filter(t => vocab.includes(t));
   return tags.filter(t => !isNg(t)).slice(0, max);
 }
+/* 選択中のノード（最大4つ）のタグ表示の下に、英語の説明文を表示する */
+const DESC_MAX_SEL = 4;
+function drawDescs() {
+  if (!sel.nodes.length || sel.nodes.length > DESC_MAX_SEL) return;
+  descLoad();
+  sel.nodes.forEach(id => {
+    const n = nodeById(id); if (!n || !n.image || !media.has(n.image)) return;
+    const txt = descIdx.get(embKey(n)); if (!txt) return;
+    const b = box(n), an = tagAnchor(n), W = Math.max(b.w + 40, 230), PAD = 6, LH = 14;
+    ctx.save(); ctx.font = '11px sans-serif'; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+    const lines = [];
+    txt.split('\n').forEach(par => {              // 折り返し（英語は単語単位）
+      let cur = '';
+      par.split(' ').forEach(w => {
+        const t = cur ? cur + ' ' + w : w;
+        if (cur && ctx.measureText(t).width > W - PAD * 2) { lines.push(cur); cur = w; } else cur = t;
+      });
+      lines.push(cur);
+    });
+    const x = an.cx - W / 2, y = an.top + tagH(n) + 4, h = lines.length * LH + PAD * 2;
+    ctx.fillStyle = 'rgba(27,29,36,.92)'; rr(x, y, W, h, 6); ctx.fill();
+    ctx.strokeStyle = '#ffb84d'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = '#e8ecf4';
+    lines.forEach((l, i) => ctx.fillText(l, x + PAD, y + PAD + i * LH));
+    ctx.restore();
+  });
+}
 /* ---------- LM Studio：英語の説明文 → テキスト埋め込みによる画像の類似度 ---------- */
 /* VLM に各画像のポーズ・表情などを固定の書式の英語で説明させ、埋め込みモデル（/v1/embeddings）でベクトル化する。
    説明文は画像ごとにキャッシュ（localStorage）するので、2回目以降は埋め込みの計算だけになる */
 const DESC_KEY = 'keyframe-map.desc.v1', descCache = new Map();
 let descReady = false;
+const descIdx = new Map();                    // 画像の埋め込みキー → 説明文（選択したノードに表示する用）
+const descKeyImg = k => k.split('|').slice(3).join('|');   // キー＝desc2|モデル|語彙のハッシュ|画像のキー
 function descLoad() {
   if (descReady) return; descReady = true;
-  try { const o = JSON.parse(lsGet(DESC_KEY) || '{}'); for (const k in o) descCache.set(k, o[k]); } catch (_) {}
+  try { const o = JSON.parse(lsGet(DESC_KEY) || '{}'); for (const k in o) if (k.startsWith('desc2|')) { descCache.set(k, o[k]); descIdx.set(descKeyImg(k), o[k]); } } catch (_) {}
 }
 function descSave() {
   try { const o = {}; [...descCache].slice(-800).forEach(([k, v]) => { o[k] = v; }); localStorage.setItem(DESC_KEY, JSON.stringify(o)); } catch (_) {}
 }
-const DESC_PROMPT = [
+const DESC_BASE = [
   'Describe ONLY the pose and expression of the character in this image, in English, using exactly this format (one line each, short phrases, no extra text):',
   'Body orientation: (front / three-quarter left / three-quarter right / left side / right side / back)',
   'Posture: (standing / sitting / kneeling / crouching / leaning forward / leaning back / lying ...)',
@@ -2405,7 +2435,15 @@ const DESC_PROMPT = [
   'Right arm and hand: (position and gesture, from the viewer\'s right)',
   'Legs: (stance, knees, feet)',
   'Ignore the background, clothing design, colors and art style. Use the same wording for the same pose across images.'
-].join('\n');
+];
+/* 設定のタグの語彙（優先）・ネガティブリスト（禁止）を説明文の指示に反映する。日本語の語は英訳した語で統一させる */
+function descPrompt() {
+  const pos = lmList(settings.vocab), ng = lmList(settings.vocabNg), r = DESC_BASE.slice();
+  if (pos.length) r.splice(r.length - 1, 0, 'Preferred vocabulary: ' + pos.join(', ') + '\nWhenever one of these terms (translate it to English if it is not English) describes what you see, use it instead of a synonym. Use other words only when none of them fits.');
+  if (ng.length) r.splice(r.length - 1, 0, 'Forbidden words: ' + ng.join(', ') + '\nNever use these words or their English translations or close synonyms; describe the pose with other words.');
+  return r.join('\n');
+}
+const strHash = t => { let h = 5381; for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 async function lmDescribe(base, model, n, signal) {
   const el = await loadImgEl(n.image);
   if (!el || !el.naturalWidth) throw new Error('画像を読み込めません');
@@ -2413,7 +2451,7 @@ async function lmDescribe(base, model, n, signal) {
   const post = pre => {
     const msgs = [
       { role: 'system', content: 'You are a precise annotator of character poses for animation keyframes.' },
-      { role: 'user', content: [{ type: 'text', text: DESC_PROMPT }, { type: 'image_url', image_url: { url } }] }
+      { role: 'user', content: [{ type: 'text', text: descPrompt() }, { type: 'image_url', image_url: { url } }] }
     ];
     if (pre) msgs.push({ role: 'assistant', content: NO_THINK });
     return lmFetch(base, '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2439,11 +2477,13 @@ async function lmEmbModelId(base, signal) {    // 埋め込みモデルのIDが�
 async function lmDescEmbs(list, signal) {      // list の各ノードの説明文を埋め込みにして返す
   descLoad();
   const base = lmBaseOf(settings.lmUrl), model = await lmModelId(base, signal), emb = await lmEmbModelId(base, signal);
-  const keyOf = n => 'desc1|' + model + '|' + embKey(n);
+  const vh = strHash(descPrompt()), keyOf = n => 'desc2|' + model + '|' + vh + '|' + embKey(n);
   const need = list.filter(n => !descCache.has(keyOf(n)));
   for (let i = 0; i < need.length; i++) {
     toast(`説明文を生成中… ${i + 1}/${need.length}（${model}）`);
-    descCache.set(keyOf(need[i]), await lmDescribe(base, model, need[i], signal));
+    const d = await lmDescribe(base, model, need[i], signal);
+    descCache.set(keyOf(need[i]), d); descIdx.set(embKey(need[i]), d);
+    draw();
     if ((i & 7) === 7) descSave();
   }
   if (need.length) descSave();
