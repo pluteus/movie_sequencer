@@ -2028,46 +2028,162 @@ function loadImgEl(name) {
     e.el.addEventListener('error', () => { clearTimeout(to); res(null); }, { once: true });
   });
 }
-async function sortedBySimilarity() {        // 画像を小さな縮小画像にして比べ、似たものが隣り合う順に並べる
-  const FS = 24, c = document.createElement('canvas'); c.width = c.height = FS;
+/* ---------- 画像の類似度 ---------- */
+/* B：CLIP（画像認識モデル）の埋め込みを端末内で計算し、ポーズ・表情・雰囲気の近さを比べる（初回のみモデルを取得）
+   C：キャラクター部分を切り出し、全画像に共通する成分（背景・同じ服など）を引いて「差分」だけを比べる画素特徴
+   2つの距離をそれぞれ正規化して混ぜる。CLIP を使えないときは C のみで並べる */
+const CLIP_LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1';
+const CLIP_MODEL = 'Xenova/clip-vit-base-patch32';
+const CLIP_FLAG = 'keyframe-map.clip.ready', EMB_KEY = 'keyframe-map.emb.v1', EMB_TAG = 'clipb32q8c1|';
+const W_CLIP = 0.7, W_PIX = 0.3, PIX = 32;
+const embCache = new Map();                  // 埋め込みのキャッシュ（キー＝画像のハッシュ）
+let embReady = false, clipP = null, simNote = '';
+const lsGet = k => { try { return localStorage.getItem(k); } catch (_) { return null; } };
+const b64enc = f => {
+  const u = new Uint8Array(f.buffer, f.byteOffset, f.byteLength);
+  let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+const b64dec = s => { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return new Float32Array(u.buffer); };
+function embLoad() {
+  if (embReady) return; embReady = true;
+  try { const o = JSON.parse(lsGet(EMB_KEY) || '{}'); for (const k in o) embCache.set(k, b64dec(o[k])); } catch (_) {}
+}
+function embSave() {
+  try {
+    const o = {}; [...embCache].slice(-800).forEach(([k, v]) => { o[k] = b64enc(v); });
+    localStorage.setItem(EMB_KEY, JSON.stringify(o));
+  } catch (_) {}
+}
+const embKey = n => { const f = mediaFile.get(n.image); return EMB_TAG + (mediaHash.get(n.image) || (n.image + ':' + (f ? f.size : 0))); };
+
+function loadClip() {                        // モデルは初回だけダウンロードされ、以降はブラウザのキャッシュから読み込まれる
+  if (!clipP) clipP = (async () => {
+    const T = await import(CLIP_LIB);
+    let last = 0;
+    const cb = p => { if (p && p.status === 'progress' && Date.now() - last > 400) { last = Date.now(); toast(`画像認識モデルを読み込み中… ${Math.round(p.progress || 0)}%（初回のみ）`); } };
+    const processor = await T.AutoProcessor.from_pretrained(CLIP_MODEL, { progress_callback: cb });
+    const model = await T.CLIPVisionModelWithProjection.from_pretrained(CLIP_MODEL, { dtype: 'q8', progress_callback: cb });
+    return { T, processor, model };
+  })().catch(e => { clipP = null; throw e; });
+  return clipP;
+}
+async function clipEmbed(clip, cv224) {
+  const d = cv224.getContext('2d').getImageData(0, 0, 224, 224).data, rgb = new Uint8ClampedArray(224 * 224 * 3);
+  for (let i = 0, j = 0; i < d.length; i += 4) { rgb[j++] = d[i]; rgb[j++] = d[i + 1]; rgb[j++] = d[i + 2]; }
+  const inputs = await clip.processor(new clip.T.RawImage(rgb, 224, 224, 3));
+  const out = await clip.model(inputs);
+  const e = Float32Array.from(out.image_embeds.data);
+  let s = 0; for (let k = 0; k < e.length; k++) s += e[k] * e[k];
+  s = Math.sqrt(s) || 1; for (let k = 0; k < e.length; k++) e[k] /= s;
+  return e;
+}
+
+/* C-1：キャラクター部分の範囲を推定する（透過があればアルファ、なければ外周の色との差） */
+function analyzeImage(el) {
+  const S = 64, c = document.createElement('canvas'); c.width = c.height = S;
   const x = c.getContext('2d', { willReadFrequently: true });
-  const feats = [], none = [];
-  for (const n of nodes) {
-    const el = n.image ? await loadImgEl(n.image) : null;
-    if (!el || !el.naturalWidth) { none.push(n); continue; }
-    x.fillStyle = '#000'; x.fillRect(0, 0, FS, FS);
-    const r = Math.min(FS / el.naturalWidth, FS / el.naturalHeight), dw = el.naturalWidth * r, dh = el.naturalHeight * r;
-    x.drawImage(el, (FS - dw) / 2, (FS - dh) / 2, dw, dh);
-    const d = x.getImageData(0, 0, FS, FS).data, v = new Float32Array(FS * FS * 4), gr = new Float32Array(FS * FS);
-    for (let i = 0, k = 0, q = 0; i < d.length; i += 4, q++) {
-      const R = d[i] / 255, G = d[i + 1] / 255, B = d[i + 2] / 255;
-      v[k++] = R; v[k++] = G; v[k++] = B; gr[q] = .3 * R + .59 * G + .11 * B;
-    }
-    let k2 = FS * FS * 3;                    // 色に加えて輪郭（明暗の変化）も比べ、ポーズの違いを拾いやすくする
-    for (let yy = 0; yy < FS; yy++) for (let xx = 0; xx < FS; xx++) {
-      const q = yy * FS + xx, gx = xx < FS - 1 ? gr[q + 1] - gr[q] : 0, gy = yy < FS - 1 ? gr[q + FS] - gr[q] : 0;
-      v[k2++] = Math.min(1, (Math.abs(gx) + Math.abs(gy)) * 2);
-    }
-    feats.push({ n, v });
+  x.drawImage(el, 0, 0, S, S);
+  const d = x.getImageData(0, 0, S, S).data;
+  let tr = 0; for (let i = 3; i < d.length; i += 4) if (d[i] < 200) tr++;
+  const alpha = tr > S * S * 0.02;
+  let bg = [255, 255, 255], mask;
+  if (alpha) mask = p => d[p * 4 + 3] > 24;
+  else {
+    const ch = [[], [], []];
+    const add = p => { for (let k = 0; k < 3; k++) ch[k].push(d[p * 4 + k]); };
+    for (let i = 0; i < S; i++) { add(i); add((S - 1) * S + i); add(i * S); add(i * S + S - 1); }
+    bg = ch.map(a => a.sort((p, q) => p - q)[a.length >> 1]);
+    mask = p => Math.hypot(d[p * 4] - bg[0], d[p * 4 + 1] - bg[1], d[p * 4 + 2] - bg[2]) > 36;
   }
-  none.sort(byName);                          // 画像のないノードは最後に名前順
-  const M = feats.length;
-  if (M < 3) return [...feats.map(f => f.n), ...none];
+  let x0 = S, y0 = S, x1 = -1, y1 = -1, cnt = 0;
+  for (let yy = 0; yy < S; yy++) for (let xx = 0; xx < S; xx++) {
+    if (!mask(yy * S + xx)) continue;
+    cnt++; if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (yy < y0) y0 = yy; if (yy > y1) y1 = yy;
+  }
+  let box = { x0: 0, y0: 0, x1: 1, y1: 1 };
+  if (cnt >= S * S * 0.01 && cnt <= S * S * 0.97) {   // 検出できなかった・全面が前景のときは画像全体を使う
+    const pad = 0.05;
+    box = { x0: clamp(x0 / S - pad, 0, 1), y0: clamp(y0 / S - pad, 0, 1), x1: clamp((x1 + 1) / S + pad, 0, 1), y1: clamp((y1 + 1) / S + pad, 0, 1) };
+  }
+  return { bg, box };
+}
+function cropCanvas(el, info, T) {           // 範囲を切り出し、縦横比を保って T×T の中央に置く
+  const c = document.createElement('canvas'); c.width = c.height = T;
+  const x = c.getContext('2d', { willReadFrequently: true }), b = info.box;
+  x.fillStyle = `rgb(${info.bg.join(',')})`; x.fillRect(0, 0, T, T);
+  const sx = b.x0 * el.naturalWidth, sy = b.y0 * el.naturalHeight, sw = (b.x1 - b.x0) * el.naturalWidth, sh = (b.y1 - b.y0) * el.naturalHeight;
+  const r = Math.min(T / sw, T / sh), dw = sw * r, dh = sh * r;
+  x.imageSmoothingQuality = 'high';
+  x.drawImage(el, sx, sy, sw, sh, (T - dw) / 2, (T - dh) / 2, dw, dh);
+  return c;
+}
+function pixFeature(x, FS) {                 // 色（RGB）と輪郭（明暗の変化）
+  const d = x.getImageData(0, 0, FS, FS).data, N = FS * FS;
+  const col = new Float32Array(N * 3), edge = new Float32Array(N), gr = new Float32Array(N);
+  for (let p = 0; p < N; p++) {
+    const R = d[p * 4] / 255, G = d[p * 4 + 1] / 255, B = d[p * 4 + 2] / 255;
+    col[p * 3] = R; col[p * 3 + 1] = G; col[p * 3 + 2] = B; gr[p] = .3 * R + .59 * G + .11 * B;
+  }
+  for (let yy = 0; yy < FS; yy++) for (let xx = 0; xx < FS; xx++) {
+    const q = yy * FS + xx, gx = xx < FS - 1 ? gr[q + 1] - gr[q] : 0, gy = yy < FS - 1 ? gr[q + FS] - gr[q] : 0;
+    edge[q] = Math.min(1, (Math.abs(gx) + Math.abs(gy)) * 2);
+  }
+  return { col, edge };
+}
+/* C-2：全画像の平均を引き、各次元を標準偏差で割る（共通部分は消え、画像ごとに違う部分が強調される）。
+   色・輪郭・位置とサイズ（geo）は、それぞれの寄与が 0.40／0.45／0.15 になるよう重みを揃える */
+function pixDist(feats) {
+  const M = feats.length, shares = { col: .40, edge: .45, geo: .15 };
+  const parts = Object.keys(shares).map(key => {
+    const L = feats[0][key].length, mean = new Float32Array(L), sd = new Float32Array(L);
+    for (const f of feats) for (let k = 0; k < L; k++) mean[k] += f[key][k] / M;
+    for (const f of feats) for (let k = 0; k < L; k++) { const t = f[key][k] - mean[k]; sd[k] += t * t / M; }
+    for (let k = 0; k < L; k++) sd[k] = Math.sqrt(sd[k]) + 0.03;
+    const w = Math.sqrt(shares[key] / L);
+    return feats.map(f => { const o = new Float32Array(L); for (let k = 0; k < L; k++) o[k] = (f[key][k] - mean[k]) / sd[k] * w; return o; });
+  });
   const D = Array.from({ length: M }, () => new Float32Array(M));
   for (let i = 0; i < M; i++) for (let j = i + 1; j < M; j++) {
-    let s = 0; const a = feats[i].v, b = feats[j].v;
-    for (let k = 0; k < a.length; k++) { const d = a[k] - b[k]; s += d * d; }
+    let s = 0;
+    for (const P of parts) { const a = P[i], b = P[j]; for (let k = 0; k < a.length; k++) { const t = a[k] - b[k]; s += t * t; } }
     D[i][j] = D[j][i] = Math.sqrt(s);
   }
+  return D;
+}
+function clipDist(embs) {                    // 平均を引いてから正規化し、コサイン距離にする
+  const M = embs.length, L = embs[0].length, mean = new Float32Array(L);
+  embs.forEach(e => { for (let k = 0; k < L; k++) mean[k] += e[k] / M; });
+  const z = embs.map(e => {
+    const o = new Float32Array(L); let s = 0;
+    for (let k = 0; k < L; k++) { o[k] = e[k] - mean[k]; s += o[k] * o[k]; }
+    s = Math.sqrt(s) || 1; for (let k = 0; k < L; k++) o[k] /= s;
+    return o;
+  });
+  const D = Array.from({ length: M }, () => new Float32Array(M));
+  for (let i = 0; i < M; i++) for (let j = i + 1; j < M; j++) {
+    let s = 0; for (let k = 0; k < L; k++) s += z[i][k] * z[j][k];
+    D[i][j] = D[j][i] = Math.max(0, 1 - s);
+  }
+  return D;
+}
+function normMean(D, M) {                    // 平均が 1 になるよう揃える（2つの距離を混ぜるため）
+  let s = 0, c = 0;
+  for (let i = 0; i < M; i++) for (let j = i + 1; j < M; j++) { s += D[i][j]; c++; }
+  const m = (s / c) || 1;
+  for (let i = 0; i < M; i++) for (let j = 0; j < M; j++) D[i][j] /= m;
+  return D;
+}
+function orderByDist(D, M) {                 // 近いものを順にたどり、2-opt で全体の距離を縮める
   let start = 0, bestSum = -1;               // 他と最も違うものを端にする
   for (let i = 0; i < M; i++) { let s = 0; for (let j = 0; j < M; j++) s += D[i][j]; if (s > bestSum) { bestSum = s; start = i; } }
   const used = new Uint8Array(M), path = [start]; used[start] = 1;
-  while (path.length < M) {                  // 最も近いものを順にたどる
+  while (path.length < M) {
     const last = path[path.length - 1]; let bj = -1, bd = Infinity;
     for (let j = 0; j < M; j++) if (!used[j] && D[last][j] < bd) { bd = D[last][j]; bj = j; }
     used[bj] = 1; path.push(bj);
   }
-  for (let improved = true, guard = 0; improved && guard < 50; guard++) {   // 2-opt で全体の距離を縮める
+  for (let improved = true, guard = 0; improved && guard < 50; guard++) {
     improved = false;
     for (let i = 0; i < M - 1; i++) for (let j = i + 1; j < M; j++) {
       const a = i > 0 ? D[path[i - 1]][path[i]] : 0, b = j < M - 1 ? D[path[j]][path[j + 1]] : 0;
@@ -2075,7 +2191,56 @@ async function sortedBySimilarity() {        // 画像を小さな縮小画像�
       if (a2 + b2 < a + b - 1e-6) { path.splice(i, j - i + 1, ...path.slice(i, j + 1).reverse()); improved = true; }
     }
   }
-  return [...path.map(i => feats[i].n), ...none];
+  return path;
+}
+async function sortedBySimilarity() {        // 画像の類似度（CLIP＋画素特徴）が近いものが隣り合う順に並べる
+  embLoad(); simNote = '';
+  if (hashJobs.size) await Promise.all([...hashJobs.values()]);
+  const withImg = nodes.filter(n => n.image && media.has(n.image));
+  const need = withImg.filter(n => !embCache.has(embKey(n))).length;   // 埋め込みの計算が必要な枚数
+  let model = null, useClip = withImg.length >= 3;
+  if (useClip && need) {
+    if (!lsGet(CLIP_FLAG) && !confirm('初回のみ、画像認識モデル（約90MB）をダウンロードします。\nキャンセルすると、画素ベースの簡易比較で並べ替えます。')) {
+      useClip = false; simNote = '画素のみで比較';
+    } else {
+      try { model = await loadClip(); try { localStorage.setItem(CLIP_FLAG, '1'); } catch (_) {} }
+      catch (_) { useClip = false; simNote = '画像認識モデルを読み込めず画素のみで比較'; toast(simNote); }
+    }
+  }
+  const feats = [], none = [];
+  let done = 0;
+  for (const n of nodes) {
+    const el = n.image ? await loadImgEl(n.image) : null;
+    if (!el || !el.naturalWidth) { none.push(n); continue; }
+    const info = analyzeImage(el), big = cropCanvas(el, info, 224);
+    const sm = document.createElement('canvas'); sm.width = sm.height = PIX;
+    const sx = sm.getContext('2d', { willReadFrequently: true });
+    sx.imageSmoothingQuality = 'high'; sx.drawImage(big, 0, 0, PIX, PIX);
+    const b = info.box;
+    const f = { n, ...pixFeature(sx, PIX), geo: Float32Array.of((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, b.x1 - b.x0, b.y1 - b.y0), emb: null };
+    if (useClip) {
+      const k = embKey(n);
+      f.emb = embCache.get(k) || null;
+      if (!f.emb && model) {
+        try { f.emb = await clipEmbed(model, big); embCache.set(k, f.emb); }
+        catch (_) { useClip = false; simNote = '画像認識に失敗したため画素のみで比較'; }
+        done++; toast(`画像を解析中… ${done}/${need}`);
+        await new Promise(r => setTimeout(r, 0));    // 画面を更新させる
+      }
+    }
+    feats.push(f);
+  }
+  if (done) embSave();
+  none.sort(byName);                          // 画像のないノードは最後に名前順
+  const M = feats.length;
+  if (M < 3) return [...feats.map(f => f.n), ...none];
+  let D = normMean(pixDist(feats), M);
+  if (useClip && feats.every(f => f.emb)) {
+    const Dc = normMean(clipDist(feats.map(f => f.emb)), M);
+    for (let i = 0; i < M; i++) for (let j = 0; j < M; j++) D[i][j] = W_CLIP * Dc[i][j] + W_PIX * D[i][j];
+    simNote = '画像認識＋画素で比較';
+  } else if (!simNote) simNote = '画素のみで比較';
+  return [...orderByDist(D, M).map(i => feats[i].n), ...none];
 }
 
 function layoutNodes(order, simFirst) {   // simFirst：並びの基準（画像の類似度）を矢印の交差などより優先する
@@ -2288,6 +2453,7 @@ async function arrange(kind) {
     if (st.over) note.push(`重なり ${st.over} 件`);
     if (st.back) note.push(`左向きの矢印 ${st.back} 件`);
     if (kind === 'tag' && !nodes.some(n => n.tags && n.tags.length)) note.push('タグ付きのノードがないため名前順');
+    if (kind === 'image' && simNote) note.push(simNote);
     toast(`並べ替えました（矢印の交差 ${st.cross} 件${note.length ? '、' + note.join('、') : ''}）`);
   } catch (err) { toast('並べ替えに失敗しました'); }
   finally { arranging = false; }
