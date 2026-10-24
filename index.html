@@ -153,6 +153,9 @@
     <label>モデルID（空なら自動選択）
       <input id="setLmModel" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="LM Studio のモデル名">
     </label>
+    <label>埋め込みモデルID（説明文の類似度ソート用・空なら自動選択）
+      <input id="setLmEmb" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="例：text-embedding-nomic-embed-text-v1.5">
+    </label>
     <label>タグの語彙（任意・カンマ区切り）
       <input id="setVocab" type="text" placeholder="空なら自由にタグを付ける">
     </label>
@@ -1087,6 +1090,7 @@ $('#arrBtn').onclick = e => {
     { label: '↷ リドゥ', disabled: !redoSt.length, fn: redo },
     { label: '🏷 タグの類似度でソート', fn: () => arrange('tag') },
     { label: '🖼 画像の類似度でソート', fn: () => arrange('image') },
+    { label: '🖼 画像の類似度でソート（LM Studio・英語の説明文）', fn: () => arrange('imageLM') },
     { label: tagging ? '⏹ タグ付けを中止' : '🤖 画像にタグ付け（LM Studio）', fn: autoTagLM }
   ]);
 };
@@ -2056,7 +2060,7 @@ function loadImgEl(name) {
 const CLIP_LIB = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.1';
 const CLIP_MODEL = 'Xenova/clip-vit-base-patch32';
 const CLIP_FLAG = 'keyframe-map.clip.ready', EMB_KEY = 'keyframe-map.emb.v1', EMB_TAG = 'clipb32q8c1|';
-const W_CLIP = 0.7, W_PIX = 0.3, PIX = 32;
+const W_CLIP = 0.7, W_PIX = 0.3, PIX = 32, W_TXT = 0.5;   // W_TXT：LM Studio の説明文の距離を混ぜる割合
 const embCache = new Map();                  // 埋め込みのキャッシュ（キー＝画像のハッシュ）
 let embReady = false, clipP = null, simNote = '';
 const lsGet = k => { try { return localStorage.getItem(k); } catch (_) { return null; } };
@@ -2214,7 +2218,7 @@ function orderByDist(D, M) {                 // 近いものを順にたどり�
   }
   return path;
 }
-async function sortedBySimilarity() {        // 画像の類似度（CLIP＋画素特徴）が近いものが隣り合う順に並べる
+async function sortedBySimilarity(useLM) {        // 画像の類似度（CLIP＋画素特徴）が近いものが隣り合う順に並べる
   embLoad(); simNote = '';
   if (hashJobs.size) await Promise.all([...hashJobs.values()]);
   const withImg = nodes.filter(n => n.image && media.has(n.image));
@@ -2261,6 +2265,14 @@ async function sortedBySimilarity() {        // 画像の類似度（CLIP＋画�
     for (let i = 0; i < M; i++) for (let j = 0; j < M; j++) D[i][j] = W_CLIP * Dc[i][j] + W_PIX * D[i][j];
     simNote = '画像認識＋画素で比較';
   } else if (!simNote) simNote = '画素のみで比較';
+  if (useLM) {                                // LM Studio の説明文（英語）の埋め込みを加える
+    try {
+      const Dt = normMean(clipDist(await lmDescEmbs(feats.map(f => f.n))), M);
+      normMean(D, M);
+      for (let i = 0; i < M; i++) for (let j = 0; j < M; j++) D[i][j] = W_TXT * Dt[i][j] + (1 - W_TXT) * D[i][j];
+      simNote = '英語の説明文＋' + simNote;
+    } catch (e) { simNote = '説明文を使えず' + simNote; toast('LM Studioでの説明文の取得に失敗しました：' + e.message); await new Promise(r => setTimeout(r, 1800)); }
+  }
   return [...orderByDist(D, M).map(i => feats[i].n), ...none];
 }
 
@@ -2370,6 +2382,83 @@ async function lmTagOne(base, model, n, signal, vocab, existing) {
   tags = cleanTags((Array.isArray(tags) ? tags : []).map(t => String(t).replace(/^[#\-\s"'「」]+|["'「」\s]+$/g, '').slice(0, 20)));
   if (vocab.length) tags = tags.filter(t => vocab.includes(t));
   return tags.filter(t => !isNg(t)).slice(0, max);
+}
+/* ---------- LM Studio：英語の説明文 → テキスト埋め込みによる画像の類似度 ---------- */
+/* VLM に各画像のポーズ・表情などを固定の書式の英語で説明させ、埋め込みモデル（/v1/embeddings）でベクトル化する。
+   説明文は画像ごとにキャッシュ（localStorage）するので、2回目以降は埋め込みの計算だけになる */
+const DESC_KEY = 'keyframe-map.desc.v1', descCache = new Map();
+let descReady = false;
+function descLoad() {
+  if (descReady) return; descReady = true;
+  try { const o = JSON.parse(lsGet(DESC_KEY) || '{}'); for (const k in o) descCache.set(k, o[k]); } catch (_) {}
+}
+function descSave() {
+  try { const o = {}; [...descCache].slice(-800).forEach(([k, v]) => { o[k] = v; }); localStorage.setItem(DESC_KEY, JSON.stringify(o)); } catch (_) {}
+}
+const DESC_PROMPT = [
+  'Describe ONLY the pose and expression of the character in this image, in English, using exactly this format (one line each, short phrases, no extra text):',
+  'Body orientation: (front / three-quarter left / three-quarter right / left side / right side / back)',
+  'Posture: (standing / sitting / kneeling / crouching / leaning forward / leaning back / lying ...)',
+  'Head and gaze: (head tilt, facing direction, where the eyes look)',
+  'Expression: (smiling / neutral / surprised / eyes closed / mouth open ...)',
+  'Left arm and hand: (position and gesture, from the viewer\'s left)',
+  'Right arm and hand: (position and gesture, from the viewer\'s right)',
+  'Legs: (stance, knees, feet)',
+  'Ignore the background, clothing design, colors and art style. Use the same wording for the same pose across images.'
+].join('\n');
+async function lmDescribe(base, model, n, signal) {
+  const el = await loadImgEl(n.image);
+  if (!el || !el.naturalWidth) throw new Error('画像を読み込めません');
+  const url = cropCanvas(el, analyzeImage(el), 512).toDataURL('image/jpeg', 0.85);
+  const post = pre => {
+    const msgs = [
+      { role: 'system', content: 'You are a precise annotator of character poses for animation keyframes.' },
+      { role: 'user', content: [{ type: 'text', text: DESC_PROMPT }, { type: 'image_url', image_url: { url } }] }
+    ];
+    if (pre) msgs.push({ role: 'assistant', content: NO_THINK });
+    return lmFetch(base, '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, temperature: 0, max_tokens: 400, stream: false, messages: msgs }) }, 180000, signal);
+  };
+  let pre = !!settings.noThink && lmPrefillOK, r = await post(pre);
+  if (r.status === 400 && pre) { pre = false; lmPrefillOK = false; r = await post(false); }
+  if (!r.ok) throw new Error(`LM Studioがエラーを返しました（HTTP ${r.status}）：${(await r.text()).slice(0, 100)}`);
+  let txt = lmText(await lmJson(r)).trim();
+  if (!txt && pre) { lmPrefillOK = false; r = await post(false); if (!r.ok) throw new Error(`HTTP ${r.status}`); txt = lmText(await lmJson(r)).trim(); }
+  if (!txt) throw new Error('説明文が空でした');
+  return txt.replace(/[*#`]/g, '').replace(/\n{2,}/g, '\n').slice(0, 1200);
+}
+async function lmEmbModelId(base, signal) {    // 埋め込みモデルのIDが空なら、/models から埋め込み用らしきものを選ぶ
+  if (settings.lmEmb) return settings.lmEmb;
+  const r = await lmFetch(base, '/models', {}, 10000, signal);
+  if (!r.ok) throw new Error('モデル一覧を取得できません（HTTP ' + r.status + '）');
+  const ids = ((await lmJson(r)).data || []).map(m => m.id);
+  const id = ids.find(i => /embed|bge|e5|gte|minilm/i.test(i));
+  if (!id) throw new Error('埋め込みモデルが見つかりません（LM Studio に nomic-embed-text などを読み込み、設定にモデルIDを入力してください）');
+  return id;
+}
+async function lmDescEmbs(list, signal) {      // list の各ノードの説明文を埋め込みにして返す
+  descLoad();
+  const base = lmBaseOf(settings.lmUrl), model = await lmModelId(base, signal), emb = await lmEmbModelId(base, signal);
+  const keyOf = n => 'desc1|' + model + '|' + embKey(n);
+  const need = list.filter(n => !descCache.has(keyOf(n)));
+  for (let i = 0; i < need.length; i++) {
+    toast(`説明文を生成中… ${i + 1}/${need.length}（${model}）`);
+    descCache.set(keyOf(need[i]), await lmDescribe(base, model, need[i], signal));
+    if ((i & 7) === 7) descSave();
+  }
+  if (need.length) descSave();
+  const pre = /nomic/i.test(emb) ? 'clustering: ' : '';   // nomic-embed は用途ごとの接頭辞が必要
+  const texts = list.map(n => pre + descCache.get(keyOf(n))), out = [];
+  for (let i = 0; i < texts.length; i += 16) {
+    toast(`説明文を埋め込み中… ${Math.min(i + 16, texts.length)}/${texts.length}（${emb}）`);
+    const r = await lmFetch(base, '/embeddings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: emb, input: texts.slice(i, i + 16) }) }, 120000, signal);
+    if (!r.ok) throw new Error(`埋め込みAPIがエラーを返しました（HTTP ${r.status}）：${(await r.text()).slice(0, 100)}`);
+    const d = ((await lmJson(r)).data || []).slice().sort((a, b) => a.index - b.index);
+    if (d.length !== Math.min(16, texts.length - i)) throw new Error('埋め込みの件数が一致しません');
+    d.forEach(x => out.push(Float32Array.from(x.embedding)));
+  }
+  return out;
 }
 async function autoTagLM() {
   if (tagging) { if (confirm('タグ付けを中止しますか？')) tagging.abort(); return; }
@@ -2605,8 +2694,8 @@ async function arrange(kind) {
   try {
     await new Promise(r => setTimeout(r, 30));
     commitHist(); if (lastSnap) lastSnap.view = { ...view };   // アンドゥで表示位置も戻す
-    const order = kind === 'tag' ? sortedByTag() : await sortedBySimilarity();
-    const st = nodes.length ? layoutNodes(order, kind === 'image') : { cross: 0, thru: 0, over: 0, back: 0 };
+    const order = kind === 'tag' ? sortedByTag() : await sortedBySimilarity(kind === 'imageLM');
+    const st = nodes.length ? layoutNodes(order, kind !== 'tag') : { cross: 0, thru: 0, over: 0, back: 0 };
     placeFreeArrows();
     fitView(); save(); draw();
     const note = [];
@@ -2614,7 +2703,7 @@ async function arrange(kind) {
     if (st.over) note.push(`重なり ${st.over} 件`);
     if (st.back) note.push(`左向きの矢印 ${st.back} 件`);
     if (kind === 'tag' && !nodes.some(n => n.tags && n.tags.length)) note.push('タグ付きのノードがないため名前順');
-    if (kind === 'image' && simNote) note.push(simNote);
+    if (kind !== 'tag' && simNote) note.push(simNote);
     toast(`並べ替えました（矢印の交差 ${st.cross} 件${note.length ? '、' + note.join('、') : ''}）`);
   } catch (err) { toast('並べ替えに失敗しました'); }
   finally { arranging = false; }
@@ -2690,19 +2779,19 @@ $('#fsBtn').onclick = async () => {
 const player = $('#player'), pImg = $('#pImg'), pVid = $('#pVid'), pCap = $('#pCap');
 /* 設定（端末のブラウザに保存） */
 const SET_KEY = 'keyframe-map.settings.v1';
-const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
+const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
 try {
   const o = JSON.parse(localStorage.getItem(SET_KEY) || '{}');
   if (isFinite(o.still) && o.still > 0) settings.still = clamp(+o.still, 0.1, 60);
   if (isFinite(o.loop) && o.loop >= 1) settings.loop = clamp(Math.round(+o.loop), 1, 99);
-  for (const k of ['lmUrl', 'lmModel', 'vocab', 'vocabNg']) if (typeof o[k] === 'string') settings[k] = o[k];
+  for (const k of ['lmUrl', 'lmModel', 'lmEmb', 'vocab', 'vocabNg']) if (typeof o[k] === 'string') settings[k] = o[k];
   if (typeof o.noThink === 'boolean') settings.noThink = o.noThink;
   if (isFinite(o.tagMax) && o.tagMax >= 1) settings.tagMax = clamp(Math.round(+o.tagMax), 1, 20);
 } catch (_) {}
 $('#setBtn').onclick = () => {
   closePopups();
   $('#setStill').value = settings.still; $('#setLoop').value = settings.loop;
-  $('#setLmUrl').value = settings.lmUrl; $('#setLmModel').value = settings.lmModel; $('#setVocab').value = settings.vocab; $('#setNoThink').checked = settings.noThink;
+  $('#setLmUrl').value = settings.lmUrl; $('#setLmModel').value = settings.lmModel; $('#setLmEmb').value = settings.lmEmb; $('#setVocab').value = settings.vocab; $('#setNoThink').checked = settings.noThink;
   $('#setVocabNg').value = settings.vocabNg; $('#setTagMax').value = settings.tagMax;
   $('#setDlg').hidden = false;
 };
@@ -2712,7 +2801,7 @@ $('#setOk').onclick = () => {
   const st = parseFloat($('#setStill').value), lp = parseInt($('#setLoop').value, 10);
   settings.still = isFinite(st) && st > 0 ? clamp(Math.round(st * 10) / 10, 0.1, 60) : settings.still;
   settings.loop = isFinite(lp) && lp >= 1 ? clamp(lp, 1, 99) : settings.loop;
-  settings.lmUrl = lmBaseOf($('#setLmUrl').value); settings.lmModel = $('#setLmModel').value.trim(); settings.vocab = $('#setVocab').value.trim();
+  settings.lmUrl = lmBaseOf($('#setLmUrl').value); settings.lmModel = $('#setLmModel').value.trim(); settings.lmEmb = $('#setLmEmb').value.trim(); settings.vocab = $('#setVocab').value.trim();
   settings.vocabNg = $('#setVocabNg').value.trim(); settings.tagMax = clamp(parseInt($('#setTagMax').value, 10) || 8, 1, 20);
   settings.noThink = $('#setNoThink').checked; lmPrefillOK = lmSchemaOK = true;   // 設定を変えたら対応状況の判定をやり直す
   try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (_) {}
