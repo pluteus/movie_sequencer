@@ -49,6 +49,12 @@
   .btns{display:flex;gap:8px;flex-wrap:wrap}
   .btns button{flex:1}
   #dlgOk,#setOk{background:var(--blue);color:#06121f;border-color:var(--blue)}
+  #descLayer{position:fixed;inset:0;overflow:hidden;pointer-events:none}
+  .dbox{position:absolute;left:0;top:0;transform-origin:0 0;pointer-events:auto;box-sizing:border-box;background:rgba(27,29,36,.92);
+    border:1px solid #ffb84d;border-radius:6px;padding:20px 6px 6px;font:11px/14px sans-serif;color:#e8ecf4;white-space:pre-wrap;
+    overflow-wrap:anywhere;-webkit-user-select:text;user-select:text;cursor:text;-webkit-touch-callout:default}
+  .dbox .dcopy{position:absolute;top:2px;right:4px;font:10px sans-serif;padding:1px 8px;border-radius:4px;border:1px solid #ffb84d;
+    background:transparent;color:#ffb84d;cursor:pointer;-webkit-user-select:none;user-select:none}
   #toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);
     background:#000c;color:#fff;padding:10px 16px;border-radius:20px;font-size:13px;z-index:90;
     pointer-events:none;opacity:0;transition:opacity .2s;max-width:90vw;text-align:center}
@@ -84,6 +90,7 @@
 </head>
 <body>
 <canvas id="cv"></canvas>
+<div id="descLayer"></div>
 
 <div id="ui">
   <div class="row">
@@ -2398,40 +2405,43 @@ async function lmTagOne(base, model, n, signal, vocab, existing) {
 }
 const strHash = t => { let h = 5381; for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 const descKeyOf = (model, n) => 'desc2|' + model + '|' + strHash(descPrompt()) + '|' + embKey(n);
-const mKey = (a, b) => 'M:' + strHash(a + '||' + b);   // 矢印の説明文の索引（前後ノードの説明文が変わると別物になる）
+const mKey = (a, b) => 'P2:' + strHash(a + '||' + b);   // 矢印の説明文の索引（前後ノードの説明文が変わると別物になる）
 /* 選択中のノード（最大4つ）のタグ表示の下に、英語の説明文を表示する */
 const DESC_MAX_SEL = 4;
-function drawDescBox(cx, top, n, txt) {
-  const W = Math.max(n && n.image ? box(n).w + 40 : 0, 230), PAD = 6, LH = 14;
-  ctx.save(); ctx.font = '11px sans-serif'; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
-  const lines = [];
-  txt.split('\n').forEach(par => {              // 折り返し（英語は単語単位）
-    let cur = '';
-    par.split(' ').forEach(w => {
-      const t = cur ? cur + ' ' + w : w;
-      if (cur && ctx.measureText(t).width > W - PAD * 2) { lines.push(cur); cur = w; } else cur = t;
-    });
-    lines.push(cur);
-  });
-  const x = cx - W / 2, h = lines.length * LH + PAD * 2;
-  ctx.fillStyle = 'rgba(27,29,36,.92)'; rr(x, top, W, h, 6); ctx.fill();
-  ctx.strokeStyle = '#ffb84d'; ctx.lineWidth = 1; ctx.stroke();
-  ctx.fillStyle = '#e8ecf4';
-  lines.forEach((l, i) => ctx.fillText(l, x + PAD, top + PAD + i * LH));
-  ctx.restore();
-}
+const descBoxes = new Map();                 // 表示中の説明文ボックス（キー → 要素）。文字は変わったときだけ書き換える（選択範囲を保つため）
 const nodeDesc = n => (n && n.image && media.has(n.image)) ? descIdx.get(embKey(n)) : null;
-function drawDescs() {
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); }
+  catch (_) { const a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select(); try { document.execCommand('copy'); } catch (__) {} a.remove(); }
+  toast('説明文をコピーしました');
+}
+function drawDescs() {                       // render の最後に呼ぶ：選択中のノード・矢印の説明文を、キャンバスに合わせて配置する
   descLoad();
+  const items = [];
   if (sel.nodes.length && sel.nodes.length <= DESC_MAX_SEL) sel.nodes.forEach(id => {
     const n = nodeById(id), txt = nodeDesc(n); if (!txt) return;
-    const an = tagAnchor(n); drawDescBox(an.cx, an.top + tagH(n) + 4, n, txt);
+    const an = tagAnchor(n); items.push({ k: 'n' + id, cx: an.cx, top: an.top + tagH(n) + 4, W: Math.max(box(n).w + 40, 230), txt });
   });
-  const a = sel.arrow && arrowById(sel.arrow);   // 矢印：前後のノードの説明文から推測した動きの説明
+  const a = sel.arrow && arrowById(sel.arrow);   // 矢印：前後のノードの説明文から作った、動画生成用のプロンプト
   if (a && !isFree(a)) {
     const fd = nodeDesc(nodeById(a.from)), td = nodeDesc(nodeById(a.to)), txt = fd && td && descIdx.get(mKey(fd, td));
-    const an = txt && tagAnchor(a); if (an) drawDescBox(an.cx, an.top + tagH(a) + 4, null, txt);
+    const an = txt && tagAnchor(a); if (an) items.push({ k: 'a' + a.id, cx: an.cx, top: an.top + tagH(a) + 4, W: 300, txt });
   }
+  const layer = $('#descLayer'), live = new Set();
+  items.forEach(it => {
+    live.add(it.k);
+    let el = descBoxes.get(it.k);
+    if (!el) {
+      el = document.createElement('div'); el.className = 'dbox';
+      const b = document.createElement('button'); b.className = 'dcopy'; b.textContent = 'コピー';
+      b.onclick = () => copyText(el.dataset.txt);
+      el.append(b, document.createTextNode('')); layer.appendChild(el); descBoxes.set(it.k, el);
+    }
+    if (el.dataset.txt !== it.txt) { el.dataset.txt = it.txt; el.lastChild.nodeValue = it.txt; }
+    el.style.width = it.W + 'px';
+    el.style.transform = `translate(${view.x + (it.cx - it.W / 2) * view.s}px,${view.y + it.top * view.s}px) scale(${view.s})`;
+  });
+  for (const [k, el] of descBoxes) if (!live.has(k)) { el.remove(); descBoxes.delete(k); }
 }
 /* ---------- LM Studio：英語の説明文 → テキスト埋め込みによる画像の類似度 ---------- */
 /* VLM に各画像のポーズ・表情などを固定の書式の英語で説明させ、埋め込みモデル（/v1/embeddings）でベクトル化する。
@@ -2489,17 +2499,21 @@ async function lmDescribe(base, model, n, signal) {
     [{ type: 'text', text: descPrompt() }, { type: 'image_url', image_url: { url } }], signal, 400);
 }
 /* 矢印：前後の静止画ノードの説明文の違いから、動画の動きを推測する */
+const MOTION_CAM = '[Static shot]';   // 先頭に付けるカメラ指定（不要なら空文字にする）
 async function lmMotion(base, model, fd, td, signal) {
   const p = [
-    'Below are pose descriptions of the FIRST frame and the LAST frame of a short animation clip of one character.',
+    'Below are pose descriptions of the FIRST frame and the LAST frame of a short clip of one character.',
     'FIRST FRAME:\n' + fd, 'LAST FRAME:\n' + td,
-    'Infer how the character moves from the first frame to the last frame, based only on the differences between the two descriptions. Answer in English using exactly this format (one line each, short phrases, no extra text):',
-    'Motion: (one short sentence summarizing the movement)',
-    'Head and gaze: (how it changes)', 'Arms and hands: (how they move)', 'Body and legs: (how they move)',
-    'Write "no change" for a part that stays the same. Do not invent objects or details that are not in the descriptions.',
+    'Write a prompt for a first-and-last-frame-to-video model that makes the character move from the first pose to the last pose.',
+    'Rules:',
+    '- Output ONE English paragraph of 35 to 70 words. No labels, no bullet points, no quotes, no explanation.',
+    (MOTION_CAM ? '- Start with the tag ' + MOTION_CAM + ', then continue in the same paragraph.\n' : '') + '- Use present tense and describe the movement in chronological order: what moves first, what follows, with smooth natural motion verbs and gentle pacing words (slowly, smoothly, gradually).',
+    '- Finish with the character settling into the pose of the last frame.',
+    '- Describe only the character\'s own movement: body, head, gaze, expression, arms, hands, legs. Do not mention "first frame", "last frame", "image" or "description". Do not describe the background, clothing, colors or art style. Do not invent objects or props. No camera movement.',
     ...vocabLines()
   ];
-  return lmChatText(base, model, 'You are an animation director who describes motion between two keyframes.', p.join('\n'), signal, 400);
+  const t = await lmChatText(base, model, 'You write concise, vivid motion prompts for a first-and-last-frame-to-video generator (MiniMax Hailuo style).', p.join('\n'), signal, 400);
+  return t.replace(/\s*\n\s*/g, ' ').replace(/^["'“”]+|["'“”]+$/g, '').trim();
 }
 async function lmEmbModelId(base, signal) {    // 埋め込みモデルのIDが空なら、/models から埋め込み用らしきものを選ぶ
   if (settings.lmEmb) return settings.lmEmb;
