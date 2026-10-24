@@ -57,6 +57,7 @@
   .dbox .dname{color:#ffb84d;font-weight:600;margin-bottom:4px;word-break:break-all;-webkit-user-select:text;user-select:text;cursor:text}
   .dbox .dcopy{font:10px sans-serif;padding:1px 8px;border-radius:4px;border:1px solid #ffb84d;
     background:transparent;color:#ffb84d;cursor:pointer;-webkit-user-select:none;user-select:none}
+  .dbox .dname.prov{font-style:italic;font-weight:400}
   .dbox .dtxt{outline:none;min-height:14px}
   .dbox .dtxt:focus{background:rgba(255,184,77,.10);border-radius:3px}
   #toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);
@@ -2424,6 +2425,8 @@ async function copyText(t, what) {
   catch (_) { const a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select(); try { document.execCommand('copy'); } catch (__) {} a.remove(); }
   toast((what || '説明文') + 'をコピーしました');
 }
+const fileStem = n => ((n && (n.image || n.name)) || '').replace(/\.[^./\\]+$/, '');
+const provName = a => { const f = fileStem(nodeById(a.from)), t = fileStem(nodeById(a.to)); return f && t ? f + '_' + t + '.mp4' : ''; };   // 動画が未指定の矢印の仮のファイル名：先頭フレーム_最終フレーム.mp4
 function drawDescs() {                       // render の最後に呼ぶ：選択中のノード・矢印のファイル名と説明文を、キャンバスに合わせて配置する
   descLoad();
   const items = [];
@@ -2432,11 +2435,11 @@ function drawDescs() {                       // render の最後に呼ぶ：選�
     const an = tagAnchor(n); items.push({ k: 'n' + id, name: n.name || '', idx: embKey(n) || '', cx: an.cx, top: an.top + tagH(n) + 4, W: Math.max(box(n).w + 40, 230), txt: nodeDesc(n) || '' });
   });
   const a = sel.arrow && arrowById(sel.arrow);   // 矢印：ファイル名と、前後のノードの説明文から作った動画生成用のプロンプト
-  const an = a && a.video && tagAnchor(a);
-  if (an) {
+  const an = a && (a.video || !isFree(a)) && tagAnchor(a);   // 動画のない矢印でも、前後がつながっていれば表示する（これから動画を生成するため）
+  if (an && (a.video || provName(a))) {
     const fd = !isFree(a) && nodeDesc(nodeById(a.from)), td = !isFree(a) && nodeDesc(nodeById(a.to));
     const idx = fd && td ? mKey(fd, td) : '';
-    items.push({ k: 'a' + a.id, name: a.video, idx, cx: an.cx, top: an.top + tagH(a) + 4, W: 300, txt: (idx && descIdx.get(idx)) || '' });
+    items.push({ k: 'a' + a.id, name: a.video || provName(a), prov: !a.video, idx, cx: an.cx, top: an.top + tagH(a) + 4, W: 300, txt: (idx && descIdx.get(idx)) || '' });
   }
   const layer = $('#descLayer'), live = new Set();
   items.forEach(it => {
@@ -2461,6 +2464,7 @@ function drawDescs() {                       // render の最後に呼ぶ：選�
     const t = el.lastChild, nm = el.children[1], b = el.firstChild.lastChild;
     el.dataset.idx = it.idx;
     if (nm.textContent !== it.name) nm.textContent = it.name;
+    nm.classList.toggle('prov', !!it.prov); nm.title = it.prov ? '仮のファイル名（動画は未指定）' : '';
     t.style.display = b.style.display = it.txt ? '' : 'none';     // 説明文がないときはファイル名だけ表示する
     if (el.dataset.txt !== it.txt && document.activeElement !== t) { el.dataset.txt = it.txt; t.textContent = it.txt; }
     el.style.width = it.W + 'px';
