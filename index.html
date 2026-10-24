@@ -1107,7 +1107,7 @@ $('#arrBtn').onclick = e => {
     { label: '↷ リドゥ', disabled: !redoSt.length, fn: redo },
     { label: '🏷 タグの類似度でソート', fn: () => arrange('tag') },
     { label: '🖼 画像の類似度でソート', fn: () => arrange('image') },
-    { label: '🖼 画像の類似度でソート（LM Studio・英語の説明文）', fn: () => arrange('imageLM') },
+    { label: '🖼 説明文の項目でソート（LM Studio・英語の説明文）', fn: () => arrange('imageLM') },
     { label: tagging ? '⏹ タグ付けを中止' : '🤖 画像にタグ付け（LM Studio）', fn: () => autoTagLM() }
   ]);
 };
@@ -2579,9 +2579,9 @@ async function lmEmbModelId(base, signal) {    // 埋め込みモデルのIDが�
   if (!id) throw new Error('埋め込みモデルが見つかりません（LM Studio に nomic-embed-text などを読み込み、設定にモデルIDを入力してください）');
   return id;
 }
-async function lmDescEmbs(list, signal) {      // list の各ノードの説明文を埋め込みにして返す
+async function lmEnsureDescs(list, signal) {   // list の各ノードの説明文を返す（なければ LM Studio で生成して保存する）
   descLoad();
-  const base = lmBaseOf(settings.lmUrl), model = await lmModelId(base, signal), emb = await lmEmbModelId(base, signal);
+  const base = lmBaseOf(settings.lmUrl), model = await lmModelId(base, signal);
   const keyOf = n => descKeyOf(model, n);
   const need = list.filter(n => !descCache.has(keyOf(n)));
   for (let i = 0; i < need.length; i++) {
@@ -2592,8 +2592,13 @@ async function lmDescEmbs(list, signal) {      // list の各ノードの説明�
     if ((i & 7) === 7) descSave();
   }
   if (need.length) descSave();
+  return list.map(n => descCache.get(keyOf(n)));
+}
+async function lmDescEmbs(list, signal) {      // list の各ノードの説明文を埋め込みにして返す（現在は未使用）
+  const base = lmBaseOf(settings.lmUrl), emb = await lmEmbModelId(base, signal), keyOf = null;
+  const descs = await lmEnsureDescs(list, signal);
   const pre = /nomic/i.test(emb) ? 'clustering: ' : '';   // nomic-embed は用途ごとの接頭辞が必要
-  const texts = list.map(n => pre + descCache.get(keyOf(n))), out = [];
+  const texts = descs.map(d => pre + d), out = [];
   for (let i = 0; i < texts.length; i += 16) {
     toast(`説明文を埋め込み中… ${Math.min(i + 16, texts.length)}/${texts.length}（${emb}）`);
     const r = await lmFetch(base, '/embeddings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2603,6 +2608,87 @@ async function lmDescEmbs(list, signal) {      // list の各ノードの説明�
     if (d.length !== Math.min(16, texts.length - i)) throw new Error('埋め込みの件数が一致しません');
     d.forEach(x => out.push(Float32Array.from(x.embedding)));
   }
+  return out;
+}
+/* 説明文の項目の選択肢の並び順による、階層的な並べ替え。
+   設定の項目のうち「項目名: (A / B / C)」（/ 区切り、または空白なしの , 区切り）の形のものを選択肢として扱い、
+   1つ目の項目で左右に分け、その内側を2つ目の項目で上下に分け、さらにその内側を3つ目の項目で左右に…と、交互に細分化する。
+   各項目では、選択肢の並びの先頭ほど左（上）に置く。判定できなかったものは各グループの最後 */
+function descChoiceFields() {
+  const fields = [];
+  descFields().forEach(line => {
+    const c = line.indexOf(':'); if (c < 0) return;
+    const h = line.slice(c + 1), a = h.indexOf('('), b = h.lastIndexOf(')'); if (a < 0 || b <= a) return;
+    const inner = h.slice(a + 1, b), sep = inner.includes('/') ? /\// : /,(?!\s)/;   // 「stance, knees」のような説明文は選択肢にしない
+    if (!sep.test(inner)) return;
+    const opts = inner.split(sep).map(x => x.replace(/(\.{2,}|…)\s*$/, '').trim()).filter(x => x && x.length <= 40);
+    if (opts.length >= 2) fields.push({ name: line.slice(0, c).trim(), opts });
+  });
+  return fields;
+}
+const dNorm = t => t.toLowerCase().replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
+function descFieldValue(text, name) {
+  const nn = dNorm(name.replace(/[^\w\s\-぀-ヿ一-鿿]/g, ''));
+  for (const ln of text.split('\n')) {
+    const c = ln.indexOf(':');
+    if (c > 0 && dNorm(ln.slice(0, c).replace(/[^\w\s\-぀-ヿ一-鿿]/g, '')) === nn) return ln.slice(c + 1);
+  }
+  return '';
+}
+function descPickOpt(val, opts) {            // 値の中で最初に現れる選択肢（同じ位置なら長いほう）の番号。なければ -1
+  const v = dNorm(val), vc = v.replace(/ /g, ''); let best = -1, bp = Infinity, bl = 0;
+  opts.forEach((op, i) => {
+    const o = dNorm(op); if (!o) return;
+    const m = new RegExp('(^|[^a-z0-9])' + o.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![a-z0-9])').exec(v);
+    let pos = m ? m.index + m[1].length : -1;
+    if (pos < 0) { const k = o.replace(/ /g, ''); if (k.length >= 3 && (pos = vc.indexOf(k)) >= 0) pos += 1000; }   // 「full body」と「fullbody」などの表記ゆれ
+    if (pos >= 0 && (pos < bp || (pos === bp && o.length > bl))) { best = i; bp = pos; bl = o.length; }
+  });
+  return best;
+}
+let descSortKeys = null, descSortDepth = 0;
+async function sortedByDescFields() {
+  if (hashJobs.size) await Promise.all([...hashJobs.values()]);
+  const list = nodes.filter(n => n.image && media.has(n.image)), none = nodes.filter(n => !list.includes(n)).sort((a, b) => natCmp(a.name, b.name));
+  if (!list.length) throw new Error('再リンク済みの画像ノードがありません');
+  const fields = descChoiceFields();
+  if (!fields.length) throw new Error('設定の説明文の項目に選択肢がありません（「項目名: (A / B / C)」の形式で書いてください）');
+  const texts = await lmEnsureDescs(list);
+  const keys = new Map(); let unknown = 0;
+  list.forEach((n, i) => {                   // 項目ごとの選択肢の番号（判定できなければ最後）
+    const k = fields.map(f => { const j = descPickOpt(descFieldValue(texts[i], f.name), f.opts); return j >= 0 ? j : f.opts.length; });
+    keys.set(n.id, k);
+    if (k.every((v, j) => v === fields[j].opts.length)) unknown++;
+  });
+  list.sort((a, b) => {
+    const ka = keys.get(a.id), kb = keys.get(b.id);
+    for (let j = 0; j < ka.length; j++) if (ka[j] !== kb[j]) return ka[j] - kb[j];
+    return natCmp(a.name, b.name);
+  });
+  descSortKeys = keys; descSortDepth = fields.length;
+  simNote = '説明文の項目（' + fields.map((f, j) => f.name + (j % 2 ? '＝上下' : '＝左右')).join('→') + '）の階層順で並べ替え' + (unknown ? `、判定できなかった画像 ${unknown} 枚` : '');
+  return [...list, ...none];
+}
+function nestedPositions(order, cw, ch) {    // 階層ごとに左右・上下を交互に分けた配置（各ノードの中心座標）。選択肢のないノードは、同じ組の中で名前順に格子状に並べる
+  const keys = descSortKeys, nf = descSortDepth;
+  const lay = (items, d) => {
+    if (d >= nf || items.some(i => !keys.has(order[i].id))) {
+      const m = items.length, c = Math.ceil(Math.sqrt(m)), r = Math.ceil(m / c);
+      return { w: c * cw, h: r * ch, p: items.map((i, j) => ({ i, x: (j % c) * cw + cw / 2, y: ((j / c) | 0) * ch + ch / 2 })) };
+    }
+    const g = new Map();
+    items.forEach(i => { const k = keys.get(order[i].id)[d]; if (!g.has(k)) g.set(k, []); g.get(k).push(i); });
+    const horiz = d % 2 === 0, gap = (horiz ? cw : ch) * 0.8 / (1 + d);   // 組どうしの間隔（深い階層ほど狭く）
+    let off = 0, W = 0, H = 0; const P = [];
+    [...g.keys()].sort((a, b) => a - b).forEach((k, j) => {
+      const c = lay(g.get(k), d + 1), o = off + (j ? gap : 0);
+      c.p.forEach(q => P.push({ i: q.i, x: q.x + (horiz ? o : 0), y: q.y + (horiz ? 0 : o) }));
+      off = o + (horiz ? c.w : c.h); W = horiz ? off : Math.max(W, c.w); H = horiz ? Math.max(H, c.h) : off;
+    });
+    return { w: W, h: H, p: P };
+  };
+  const res = lay(order.map((_, i) => i), 0), out = new Array(order.length);
+  res.p.forEach(q => { out[q.i] = { x: q.x, y: q.y }; });
   return out;
 }
 let lmBusy = false;
@@ -2672,7 +2758,7 @@ async function autoTagLM(only) {
   toast(`タグ付け${aborted ? 'を中止しました' : '完了'}：成功 ${ok} 件` + (fail ? `、失敗 ${fail} 件` : '') + (firstErr ? `（${firstErr}）` : ''));
 }
 
-function layoutNodes(order, simFirst) {   // simFirst：並びの基準（画像の類似度）を矢印の交差などより優先する
+function layoutNodes(order, simFirst, strict) {   // simFirst：並びの基準（画像の類似度）を矢印の交差などより優先する
   const N = order.length, idx = new Map(order.map((n, i) => [n.id, i]));
   const nw = order.map(n => box(n).w), nh = order.map(n => box(n).h + nodeExtra(n));
   const edges = [];
@@ -2783,8 +2869,12 @@ function layoutNodes(order, simFirst) {   // simFirst：並びの基準（画像
     rows = Math.ceil(S / cols); S = cols * rows;
     occ = new Int32Array(S).fill(-1);
     for (let i = 0; i < N; i++) { place(i, i); occ[i] = i; }      // まず並び順どおりに配置
+    if (strict) {                                                 // 配置を関数で与える場合は、最適化せずその座標にする
+      const P = strict(cw, ch); for (let i = 0; i < N; i++) { px[i] = P[i].x; py[i] = P[i].y; slotOf[i] = i; }
+      return { slots: slotOf.slice(), cw, ch, cols, st: local(all) };
+    }
     let best = 0, bestSlots = slotOf.slice();
-    if (N > 1) {
+    if (N > 1 && !strict) {
       const T0 = 100, T1 = 1, t0ms = performance.now();
       let it = 0, Tm = T0, cum = 0;
       for (;;) {
@@ -2829,6 +2919,7 @@ function layoutNodes(order, simFirst) {   // simFirst：並びの基準（画像
   }
   cw = pick.cw; ch = pick.ch; cols = pick.cols;
   for (let i = 0; i < N; i++) place(i, pick.slots[i]);
+  if (strict) { const P = strict(cw, ch); for (let i = 0; i < N; i++) { px[i] = P[i].x; py[i] = P[i].y; } }
   let ox = 0, oy = 0, x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
   order.forEach(n => { ox += n.x; oy += n.y; });
   ox /= N; oy /= N;                                               // 元の中心の位置に置く
@@ -2877,12 +2968,12 @@ async function arrange(kind) {
   if (arranging) return;
   if (!nodes.length && !arrows.some(a => isFree(a) && a.video)) return toast('並べ替えるノードがありません');
   arranging = true; closePopups();
-  toast(kind === 'tag' ? 'タグの類似度で並べ替え中…' : '画像の類似度を計算して並べ替え中…');
+  toast(kind === 'tag' ? 'タグの類似度で並べ替え中…' : kind === 'imageLM' ? '説明文の項目の順で並べ替え中…' : '画像の類似度を計算して並べ替え中…');
   try {
     await new Promise(r => setTimeout(r, 30));
     commitHist(); if (lastSnap) lastSnap.view = { ...view };   // アンドゥで表示位置も戻す
-    const order = kind === 'tag' ? sortedByTag() : await sortedBySimilarity(kind === 'imageLM');
-    const st = nodes.length ? layoutNodes(order, kind !== 'tag') : { cross: 0, thru: 0, over: 0, back: 0 };
+    const order = kind === 'tag' ? sortedByTag() : kind === 'imageLM' ? await sortedByDescFields() : await sortedBySimilarity();
+    const st = nodes.length ? layoutNodes(order, kind !== 'tag', kind === 'imageLM' ? (cw, ch) => nestedPositions(order, cw, ch) : null) : { cross: 0, thru: 0, over: 0, back: 0 };
     placeFreeArrows();
     fitView(); save(); draw();
     const note = [];
@@ -2892,7 +2983,7 @@ async function arrange(kind) {
     if (kind === 'tag' && !nodes.some(n => n.tags && n.tags.length)) note.push('タグ付きのノードがないため名前順');
     if (kind !== 'tag' && simNote) note.push(simNote);
     toast(`並べ替えました（矢印の交差 ${st.cross} 件${note.length ? '、' + note.join('、') : ''}）`);
-  } catch (err) { toast('並べ替えに失敗しました'); }
+  } catch (err) { toast('並べ替えに失敗しました' + (err && err.message ? '：' + err.message : '')); }
   finally { arranging = false; }
 }
 
