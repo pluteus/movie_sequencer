@@ -1652,13 +1652,15 @@ cv.addEventListener('pointerdown', e => { lastPt = { x: e.clientX, y: e.clientY 
 document.addEventListener('gesturestart', e => e.preventDefault());
 
 // PC: ホイールでズーム
-cv.addEventListener('wheel', e => {
+function zoomWheel(e) {
   e.preventDefault();
   const w = toWorld(e.clientX, e.clientY);
   const s = clamp(view.s * Math.exp(-e.deltaY * 0.0015), 0.15, 5);
   view.s = s; view.x = e.clientX - w.x * s; view.y = e.clientY - w.y * s;
   draw();
-}, { passive: false });
+}
+cv.addEventListener('wheel', zoomWheel, { passive: false });
+$('#descLayer').addEventListener('wheel', zoomWheel, { passive: false });   // 説明文のボックスの上でも、ホイール（トラックパッドのピンチを含む）で拡大・縮小できる
 
 /* ---------- JSON保存・読み込み ---------- */
 function serialize() {
@@ -2419,7 +2421,7 @@ const strHash = t => { let h = 5381; for (let i = 0; i < t.length; i++) h = ((h 
 const descKeyOf = (model, n) => 'desc2|' + model + '|' + strHash(descPrompt()) + '|' + embKey(n);
 const mKey = (a, b) => 'P4:' + strHash(a + '||' + b);   // 矢印の説明文の索引（前後ノードの説明文が変わると別物になる）
 /* 選択中のノード（最大4つ）のタグ表示の下に、英語の説明文を表示する */
-const DESC_MAX_SEL = 4;
+const DESC_MAX_SEL = 4, DESC_MAX_SCALE = 1.2;
 const descBoxes = new Map();                 // 表示中の説明文ボックス（キー → 要素）。文字は変わったときだけ書き換える（選択範囲を保つため）
 const nodeDesc = n => (n && n.image && media.has(n.image)) ? descIdx.get(embKey(n)) : null;
 async function copyText(t, what) {
@@ -2475,7 +2477,8 @@ function drawDescs() {                       // render の最後に呼ぶ：選�
     t.style.display = b.style.display = it.txt ? '' : 'none';     // 説明文がないときはファイル名だけ表示する
     if (el.dataset.txt !== it.txt && document.activeElement !== t) { el.dataset.txt = it.txt; t.textContent = it.txt; }
     el.style.width = it.W + 'px';
-    el.style.transform = `translate(${view.x + (it.cx - it.W / 2) * view.s}px,${view.y + it.top * view.s}px) scale(${view.s})`;
+    const bs = Math.min(view.s, DESC_MAX_SCALE);   // 拡大しても、ボックスが画面を覆わないよう大きさに上限を設ける（位置は拡大率に追従）
+    el.style.transform = `translate(${view.x + it.cx * view.s - it.W / 2 * bs}px,${view.y + it.top * view.s}px) scale(${bs})`;
   });
   for (const [k, el] of descBoxes) if (!live.has(k) && document.activeElement !== el.lastChild) { el.remove(); descBoxes.delete(k); }
 }
