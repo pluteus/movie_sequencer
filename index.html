@@ -1683,7 +1683,7 @@ function selectAll() {                       // Ctrl+A：ノードと未リン�
   if (!nodes.length && !fr.length) return;
   if (mode !== 'layout') setMode('layout');
   sel.nodes = nodes.map(n => n.id); sel.arrow = null; sel.garrows = fr.map(a => a.id); sel.grp = true;
-  centerOnNodes(); updateConnUI(); draw();
+  fitView(true); updateConnUI(); draw();
   toast(`ノード ${sel.nodes.length} 件・未リンクの矢印 ${sel.garrows.length} 本を選択`);
 }
 function pointerEnd(e) {
@@ -1958,7 +1958,7 @@ async function relinkRun(files) {
     clearSel(); updateConnUI();
   }
   const filled = await fillEmptyFrames(new Set(plan.map(p => p.name)));   // リンク済みの矢印に一致した動画でも、前後の静止画が空なら生成
-  centerOnNodes();                           // 再リンクの完了時に、全ノードの中心へスクロール
+  fitView(true);                             // 再リンクの完了時に、全ノードが見えるようにズームアウトする
   save(); draw();
   const m = missingMedia();
   const parts = [m ? `リンク完了（未リンク ${m} 件）` : 'すべてのメディアをリンクしました'];
@@ -2734,7 +2734,9 @@ async function sortedByDescFields() {
   if (!list.length) throw new Error('再リンク済みの画像ノードがありません');
   const fields = descChoiceFields();
   if (!fields.length) throw new Error('設定の説明文の項目に選択肢がありません（「項目名: (A / B / C)」の形式で書いてください）');
-  const texts = await lmEnsureDescs(list);
+  while (lmBusy || tagging) await new Promise(r => setTimeout(r, 400));   // 説明文の生成などが終わるまで待つ
+  let texts; lmBusy = true;
+  try { texts = await lmEnsureDescs(list); } finally { lmBusy = false; }
   const keys = new Map(); let unknown = 0;
   list.forEach((n, i) => {                   // 項目ごとの選択肢の番号（判定できなければ最後）
     const k = fields.map(f => { const j = descPickOpt(descFieldValue(texts[i], f.name), f.opts); return j >= 0 ? j : f.opts.length; });
@@ -2911,8 +2913,27 @@ async function removeBgRun(n) {
   } catch (e) { toast('背景を除去できませんでした：' + ((e && e.message) || e)); } finally { bgBusy = false; }
 }
 let lmBusy = false;
-async function descNodeLM(n) {               // ノード：LM Studio で英語の説明文を生成して保存する
-  if (lmBusy || tagging) return toast('LM Studioの処理中です');
+/* LM Studio の処理待ち：処理中に説明文の追加を頼まれたら順番待ちにして、手が空いたときに順に処理する */
+const lmQ = []; let lmQRun = false;
+function lmEnqueue(key, label, fn) {
+  if (lmQ.some(q => q.key === key)) return toast('すでに処理待ちです：' + label);
+  lmQ.push({ key, label, fn });
+  if (lmQRun || lmBusy || tagging) toast(`LM Studioの処理待ちに追加しました：${label}（待ち ${lmQ.length} 件）`);
+  lmPump();
+}
+async function lmPump() {
+  if (lmQRun) return; lmQRun = true;
+  try {
+    while (lmQ.length) {
+      while (lmBusy || tagging) await new Promise(r => setTimeout(r, 400));   // タグ付け・ソート・ほかの説明文の生成が終わるまで待つ
+      const q = lmQ.shift();
+      try { await q.fn(); } catch (e) { toast((e && e.message) || String(e)); }
+    }
+  } finally { lmQRun = false; }
+}
+const descNodeLM = n => lmEnqueue('n' + n.id, 'ノード「' + (n.name || n.image) + '」の説明文', () => descNodeRun(n));
+const descArrowLM = a => lmEnqueue('a' + a.id, '矢印の説明文', () => descArrowRun(a));
+async function descNodeRun(n) {                // ノード：LM Studio で英語の説明文を生成して保存する
   if (!n.image || !media.has(n.image)) return toast('再リンク済みの画像がありません');
   lmBusy = true; descLoad();
   try {
@@ -2924,8 +2945,7 @@ async function descNodeLM(n) {               // ノード：LM Studio で英語�
     draw(); toast('説明文を追加しました（ノードを選択すると表示されます）');
   } catch (e) { toast(e.message); } finally { lmBusy = false; }
 }
-async function descArrowLM(a) {              // 矢印：前後のノードの説明文の変化から動きを推測して保存する
-  if (lmBusy || tagging) return toast('LM Studioの処理中です');
+async function descArrowRun(a) {               // 矢印：前後のノードの説明文の変化から動きを推測して保存する
   const f = nodeById(a.from), t = nodeById(a.to), ok = n => n && n.image && media.has(n.image);
   if (!ok(f) || !ok(t)) return toast('前後の両方のノードに、再リンク済みの画像が必要です');
   lmBusy = true; descLoad();
@@ -3177,10 +3197,11 @@ function centerOnNodes() {                   // 全ノードの中心が画面�
   view.x = W / 2 - (Math.min(...xs) + Math.max(...xs)) / 2 * view.s;
   view.y = (H + 60) / 2 - (Math.min(...ys) + Math.max(...ys)) / 2 * view.s;
 }
-function fitView() {                         // 全体が画面に収まるように表示を合わせる
+function fitView(outOnly) {                  // 全体が画面に収まるように表示を合わせる（outOnly：拡大はせず、必要なときだけ縮小する）
   const bb = contentBox(false); if (!bb) return;
   const bw = bb.x1 - bb.x0, bh = bb.y1 - bb.y0;
-  const s = clamp(Math.min((W - 32) / bw, (H - 130) / bh), 0.15, 1);
+  let s = clamp(Math.min((W - 32) / bw, (H - 130) / bh), 0.15, 1);
+  if (outOnly) s = Math.min(view.s, s);
   view.s = s; view.x = W / 2 - (bb.x0 + bw / 2) * s; view.y = (H + 60) / 2 - (bb.y0 + bh / 2) * s;
 }
 async function arrange(kind) {
