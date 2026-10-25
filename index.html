@@ -37,6 +37,11 @@
   #setDlg{position:fixed;inset:0;z-index:70;background:#0008;display:flex;align-items:center;justify-content:center}
   #setDlg[hidden]{display:none}
   #setDlg .card{max-height:calc(100vh - 24px);overflow-y:auto}
+  .tabs{display:flex;gap:6px}
+  .tabs button{flex:1;padding:6px 4px;font-size:13px;border-radius:8px;border:1px solid #444a5c;background:transparent;color:var(--fg);cursor:pointer}
+  .tabs button.on{border-color:#ffb84d;color:#ffb84d}
+  .tabp{display:flex;flex-direction:column;gap:12px}
+  .tabp[hidden]{display:none}
   .card label{display:flex;flex-direction:column;gap:4px;font-size:14px}
   .card .hint{font-size:12px;color:#aab2c5;line-height:1.5}
   body.dragging::after{content:'ここにドロップして画像・動画を再リンク';position:fixed;inset:8px;z-index:80;display:flex;align-items:center;justify-content:center;
@@ -155,40 +160,54 @@
 <div id="setDlg" hidden>
   <div class="card">
     <div>⚙ 設定</div>
-    <label>静止画の再生秒数（秒）
-      <input id="setStill" type="number" min="0.1" max="60" step="0.1" inputmode="decimal">
-    </label>
-    <label>同じ箇所の最大ループ回数
-      <input id="setLoop" type="number" min="1" max="99" step="1" inputmode="numeric">
-    </label>
-    <div class="hint">連続再生中に、同じノード／矢印へ入ろうとして回数がこの値に達すると、ランダムなノードまたは矢印へジャンプして再生を再開します。</div>
-    <hr style="width:100%;border:0;border-top:1px solid #444a5c;margin:2px 0">
-    <label>LM Studio のURL（画像のタグ付け用）
-      <input id="setLmUrl" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="http://localhost:1234/v1">
-    </label>
-    <label>モデルID（空なら自動選択）
-      <input id="setLmModel" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="LM Studio のモデル名">
-    </label>
-    <label>埋め込みモデルID（説明文の類似度ソート用・空なら自動選択）
-      <input id="setLmEmb" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="例：text-embedding-nomic-embed-text-v1.5">
-    </label>
-    <label>説明文の項目（1行に1項目。「項目名: (例・選択肢)」の形式。行の追加・削除・並べ替えができます）
-      <textarea id="setDescFmt" rows="8" spellcheck="false" autocapitalize="off" autocorrect="off" style="font-size:13px;line-height:1.4;resize:vertical;white-space:pre"></textarea>
-    </label>
-    <label style="flex-direction:row;align-items:center;gap:8px"><input id="setUpscaled" type="checkbox" style="width:auto;padding:0"><span>動画の仮のファイル名に「_upscaled」を付ける</span></label>
-    <div class="btns"><button id="setDescFmtReset" type="button">↺ 説明文の項目を初期値に戻す</button></div>
-    <label>タグの語彙（任意・カンマ区切り）
-      <input id="setVocab" type="text" placeholder="空なら自由にタグを付ける">
-    </label>
-    <label>タグの語彙（ネガティブリスト・カンマ区切り）
-      <input id="setVocabNg" type="text" placeholder="使わせないタグ（例：キャラクター、女の子）">
-    </label>
-    <label>タグの最大数（1画像あたり）
-      <input id="setTagMax" type="number" min="1" max="20" step="1" inputmode="numeric">
-    </label>
-    <div class="hint">語彙を入れると、その中からだけタグを選びます（表記ゆれを防げます）。ネガティブリストのタグは使わせず、返ってきても除外します（全画像に共通するタグなどを外せます）。画像は上のURLのサーバーにだけ送られます。</div>
-    <label style="flex-direction:row;align-items:center;gap:8px"><input id="setNoThink" type="checkbox" style="width:auto;padding:0"><span>思考を飛ばす（空の thinking を返答の先頭に入れる）</span></label>
-    <div class="btns"><button id="setLmTest">🔌 接続テスト</button></div>
+    <div id="setTabs" class="tabs">
+      <button type="button" data-tab="std" class="on">標準</button>
+      <button type="button" data-tab="lm">LM Studio</button>
+      <button type="button" data-tab="tag">タグ・説明文</button>
+    </div>
+    <div class="tabp" data-tab="std">
+      <label>静止画の再生秒数（秒）
+        <input id="setStill" type="number" min="0.1" max="60" step="0.1" inputmode="decimal">
+      </label>
+      <label>同じ箇所の最大ループ回数
+        <input id="setLoop" type="number" min="1" max="99" step="1" inputmode="numeric">
+      </label>
+      <div class="hint">連続再生中に、同じノード／矢印へ入ろうとして回数がこの値に達すると、ランダムなノードまたは矢印へジャンプして再生を再開します。</div>
+      <label style="flex-direction:row;align-items:center;gap:8px"><input id="setUpscaled" type="checkbox" style="width:auto;padding:0"><span>動画の仮のファイル名に「_upscaled」を付ける</span></label>
+    </div>
+    <div class="tabp" data-tab="lm" hidden>
+      <label>LM Studio のURL（画像のタグ付け・説明文用）
+        <input id="setLmUrl" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="http://localhost:1234/v1">
+      </label>
+      <label>モデルID（空なら自動選択）
+        <input id="setLmModel" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="LM Studio のモデル名">
+      </label>
+      <label style="flex-direction:row;align-items:center;gap:8px"><input id="setNoThink" type="checkbox" style="width:auto;padding:0"><span>思考を飛ばす（空の thinking を返答の先頭に入れる）</span></label>
+      <label>説明文の項目（1行に1項目。「項目名: (例・選択肢)」の形式。行の追加・削除・並べ替えができます）
+        <textarea id="setDescFmt" rows="8" spellcheck="false" autocapitalize="off" autocorrect="off" style="font-size:13px;line-height:1.4;resize:vertical;white-space:pre"></textarea>
+      </label>
+      <div class="btns"><button id="setDescFmtReset" type="button">↺ 説明文の項目を初期値に戻す</button></div>
+      <label>無声音の許可リスト（矢印の説明文用・カンマ区切り。空なら使わない）
+        <input id="setSoundOk" type="text" spellcheck="false" placeholder="吐息, 溜息, 舌打ち, 咀嚼音">
+      </label>
+      <div class="hint">矢印の説明文（動画プロンプト）で、セリフや効果音のほかに書いてよい、言葉でない声・口の音です。このリストにあるものだけが使われます。画像は上のURLのサーバーにだけ送られます。</div>
+      <div class="btns"><button id="setLmTest">🔌 接続テスト</button></div>
+    </div>
+    <div class="tabp" data-tab="tag" hidden>
+      <label>埋め込みモデルID（説明文の類似度ソート用・空なら自動選択）
+        <input id="setLmEmb" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="例：text-embedding-nomic-embed-text-v1.5">
+      </label>
+      <label>タグの語彙（任意・カンマ区切り）
+        <input id="setVocab" type="text" placeholder="空なら自由にタグを付ける">
+      </label>
+      <label>タグの語彙（ネガティブリスト・カンマ区切り）
+        <input id="setVocabNg" type="text" placeholder="使わせないタグ（例：キャラクター、女の子）">
+      </label>
+      <label>タグの最大数（1画像あたり）
+        <input id="setTagMax" type="number" min="1" max="20" step="1" inputmode="numeric">
+      </label>
+      <div class="hint">語彙を入れると、その中からだけタグを選びます（表記ゆれを防げます）。ネガティブリストのタグは使わせず、返ってきても除外します（全画像に共通するタグなどを外せます）。語彙は、説明文の生成でも、優先する語・使わない語として使われます。</div>
+    </div>
     <div class="btns">
       <button id="setCancel">キャンセル</button>
       <button id="setOk">保存</button>
@@ -2574,6 +2593,7 @@ async function lmDescribe(base, model, n, signal) {
 /* 矢印：前後の静止画ノードの説明文の違いから、動画の動きを推測する */
 const MOTION_CAM = '[Static shot]';   // 先頭に付けるカメラ指定（不要なら空文字にする）
 async function lmMotion(base, model, fd, td, tags, signal) {
+  const snd = lmList(settings.soundOk);       // 設定の「無声音の許可リスト」
   const p = [
     'Below are pose descriptions of the FIRST frame and the LAST frame of a short clip of one character.',
     'FIRST FRAME:\n' + fd, 'LAST FRAME:\n' + td,
@@ -2583,8 +2603,8 @@ async function lmMotion(base, model, fd, td, tags, signal) {
     '- Output ONE paragraph of 60 to 110 words, written in English except for the Japanese dialogue line described below (not counted in the words). No labels except "Sound:" and "Dialogue:" below, no bullet points, no explanation.',
     (MOTION_CAM ? '- Start with the tag ' + MOTION_CAM + ', then continue in the same paragraph.\n' : '') + '- First describe the movement in present tense and chronological order: what moves first, what follows, with smooth natural motion verbs and gentle pacing words (slowly, smoothly, gradually). Finish the movement with the character settling into the pose of the last frame.',
     '- Describe only the character\'s own movement: body, head, gaze, expression, arms, hands, legs. Do not mention "first frame", "last frame", "image" or "description". Do not describe the background, clothing, colors or art style. Do not invent objects or props. No camera movement.',
-    '- Then add one sentence that starts with "Sound:". List the sound effects that this movement would make, in the order they happen (for example fabric rustling, soft footsteps, a hand brushing hair, light breathing, a small impact), then end with one ambient sound that fits the setting (use the scene tags when they help; otherwise a quiet indoor room tone). Include sounds that the movement would physically cause. Breath and mouth sounds are also allowed when the expression or movement suggests them: a breathy exhale (吐息), a sigh (溜息), a tongue click (舌打ち), chewing (咀嚼音), blowing into an ear(耳フー音),licking an ear(耳舐め音),sucking(チュパ音),kissing(キス音); write them in English. No music, no singing.',
-    '- Finally add one sentence that starts with "Dialogue:" containing ONE short line of Japanese speech (5 to 20 characters, written in natural spoken Japanese inside 「」) that the character would say with this expression, gesture and mood, followed by a brief English note on the voice (for example softly, cheerfully, in a whisper). Infer the line from the expression and the movement. Do not repeat the descriptions; the line must be a plausible utterance, not a narration. When it fits the expression and movement, the Dialogue sentence may instead (or additionally) contain a non-verbal vocal sound written in Japanese inside 「」: a soft breath (吐息, for example 「はぁ…」), a sigh (溜息, for example 「はぁ…」「ふぅ…」), a tongue click (舌打ち, for example 「ちっ」) or chewing sounds (咀嚼音, for example 「もぐもぐ」).',
+    '- Then add one sentence that starts with "Sound:". List the sound effects that this movement would make, in the order they happen (for example fabric rustling, soft footsteps, a hand brushing hair, light breathing, a small impact), then end with one ambient sound that fits the setting (use the scene tags when they help; otherwise a quiet indoor room tone). Include sounds that the movement would physically cause.' + (snd.length ? ' Breath and mouth sounds are also allowed when the expression or movement suggests them, but only these: ' + snd.join(', ') + '; write them in English.' : '') + ' No music, no singing.',
+    '- Finally add one sentence that starts with "Dialogue:" containing ONE short line of Japanese speech (5 to 20 characters, written in natural spoken Japanese inside 「」) that the character would say with this expression, gesture and mood, followed by a brief English note on the voice (for example softly, cheerfully, in a whisper). Infer the line from the expression and the movement. Do not repeat the descriptions; the line must be a plausible utterance, not a narration.' + (snd.length ? ' When it fits the expression and movement, the Dialogue sentence may instead (or additionally) contain a non-verbal vocal sound written in Japanese inside 「」, chosen only from this list: ' + snd.join(', ') + '.' : ''),
     ...vocabLines()
   ];
   const t = await lmChatText(base, model, 'You write concise, vivid motion-and-sound prompts for a first-and-last-frame-to-video generator with audio (MiniMax Hailuo style).', p.join('\n'), signal, 500);
@@ -3078,12 +3098,12 @@ $('#fsBtn').onclick = async () => {
 const player = $('#player'), pImg = $('#pImg'), pVid = $('#pVid'), pCap = $('#pCap');
 /* 設定（端末のブラウザに保存） */
 const SET_KEY = 'keyframe-map.settings.v1';
-const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', descFmt: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true, upscaled: true };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
+const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', descFmt: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true, upscaled: true, soundOk: '吐息, 溜息, 舌打ち, 咀嚼音' };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
 try {
   const o = JSON.parse(localStorage.getItem(SET_KEY) || '{}');
   if (isFinite(o.still) && o.still > 0) settings.still = clamp(+o.still, 0.1, 60);
   if (isFinite(o.loop) && o.loop >= 1) settings.loop = clamp(Math.round(+o.loop), 1, 99);
-  for (const k of ['lmUrl', 'lmModel', 'lmEmb', 'descFmt', 'vocab', 'vocabNg']) if (typeof o[k] === 'string') settings[k] = o[k];
+  for (const k of ['lmUrl', 'lmModel', 'lmEmb', 'descFmt', 'vocab', 'vocabNg', 'soundOk']) if (typeof o[k] === 'string') settings[k] = o[k];
   if (typeof o.noThink === 'boolean') settings.noThink = o.noThink;
   if (typeof o.upscaled === 'boolean') settings.upscaled = o.upscaled;
   if (isFinite(o.tagMax) && o.tagMax >= 1) settings.tagMax = clamp(Math.round(+o.tagMax), 1, 20);
@@ -3093,9 +3113,13 @@ $('#setBtn').onclick = () => {
   $('#setStill').value = settings.still; $('#setLoop').value = settings.loop;
   $('#setLmUrl').value = settings.lmUrl; $('#setLmModel').value = settings.lmModel; $('#setLmEmb').value = settings.lmEmb; $('#setVocab').value = settings.vocab; $('#setNoThink').checked = settings.noThink; $('#setUpscaled').checked = settings.upscaled;
   $('#setVocabNg').value = settings.vocabNg; $('#setTagMax').value = settings.tagMax;
-  $('#setDescFmt').value = descFields().join('\n');
+  $('#setDescFmt').value = descFields().join('\n'); $('#setSoundOk').value = settings.soundOk;
   $('#setDlg').hidden = false;
 };
+document.querySelectorAll('#setTabs button').forEach(b => { b.onclick = () => {       // 設定のタブの切り替え
+  document.querySelectorAll('#setTabs button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('#setDlg .tabp').forEach(x => { x.hidden = x.dataset.tab !== b.dataset.tab; });
+}; });
 $('#setCancel').onclick = () => { $('#setDlg').hidden = true; };
 $('#setLmTest').onclick = lmTest;
 $('#setDescFmtReset').onclick = () => { $('#setDescFmt').value = DESC_FMT_DEFAULT; };
@@ -3106,7 +3130,7 @@ $('#setOk').onclick = () => {
   settings.lmUrl = lmBaseOf($('#setLmUrl').value); settings.lmModel = $('#setLmModel').value.trim(); settings.lmEmb = $('#setLmEmb').value.trim(); settings.vocab = $('#setVocab').value.trim();
   settings.vocabNg = $('#setVocabNg').value.trim(); settings.tagMax = clamp(parseInt($('#setTagMax').value, 10) || 8, 1, 20);
   { const l = descFmtList($('#setDescFmt').value).join('\n'); settings.descFmt = l === DESC_FMT_DEFAULT ? '' : l; }   // 初期値のままなら空にして、今後の初期値の変更に追従する
-  settings.upscaled = $('#setUpscaled').checked;
+  settings.upscaled = $('#setUpscaled').checked; settings.soundOk = $('#setSoundOk').value.trim();
   settings.noThink = $('#setNoThink').checked; lmPrefillOK = lmSchemaOK = true;   // 設定を変えたら対応状況の判定をやり直す
   try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (_) {}
   $('#setDlg').hidden = true; toast('設定を保存しました');
