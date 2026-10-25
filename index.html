@@ -1414,6 +1414,7 @@ function onLong(g) {
       { label: '🏷 タグ・説明文を追加', fn: () => tagDescMenu(g.sx, g.sy, o) },
       { label: '✂️ 背景を除去', disabled: !(o.image && media.has(o.image)), fn: () => removeBgRun(o) },
       { label: '🔄 反転・回転', disabled: !(o.image && media.has(o.image)), fn: () => flipMenu(g.sx, g.sy, o) },
+      ...(o.image && generated.has(o.image) ? [{ label: '💾 静止画を保存（PNG）', fn: () => saveStillPng(o) }] : []),   // 自動生成・反転・回転・背景除去で作った静止画
       { label: '📋 コピー (Ctrl+C)', fn: () => copySel() },
       { label: '✂️ 切り取り (Ctrl+X)', fn: cutSel },
       { label: '🗑 ノードを削除', fn: () => deleteNode(o) }
@@ -2839,6 +2840,24 @@ async function removeBackground(n) {         // 背景を除いた画像（canva
   const fc = mk(W0, H0), fx = fc.getContext('2d');
   fx.fillStyle = col; fx.fillRect(0, 0, W0, H0); fx.drawImage(oc, 0, 0);
   return fc;
+}
+/* ---------- 生成した静止画をPNGで保存 ---------- */
+async function saveStillPng(n) {
+  try {
+    let blob = await nodeImageBlob(n);
+    if (blob.type !== 'image/png') {         // PNG以外（動画から切り出したJPEGなど）は、PNGに変換する
+      const el = await loadImgEl(n.image);
+      if (!el || !el.naturalWidth) throw new Error('画像を読み込めません');
+      const c = document.createElement('canvas'); c.width = el.naturalWidth; c.height = el.naturalHeight;
+      c.getContext('2d').drawImage(el, 0, 0);
+      blob = await new Promise(r => c.toBlob(r, 'image/png'));
+      if (!blob) throw new Error('PNGに変換できませんでした');
+    }
+    const name = n.image.replace(/\.[^.]+$/, '') + '.png', a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    toast('PNGで保存しました：' + name);
+  } catch (e) { toast('保存できませんでした：' + ((e && e.message) || e)); }
 }
 /* ---------- 反転・回転 ---------- */
 const FLIPS = {
