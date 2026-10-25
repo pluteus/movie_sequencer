@@ -1413,6 +1413,7 @@ function onLong(g) {
       { label: '✏️ 名前を変更', fn: () => { const t = prompt('ノード名', o.name); if (t !== null) { o.name = t.trim() || o.name; save(); draw(); } } },
       { label: '🏷 タグ・説明文を追加', fn: () => tagDescMenu(g.sx, g.sy, o) },
       { label: '✂️ 背景を除去', disabled: !(o.image && media.has(o.image)), fn: () => removeBgRun(o) },
+      { label: '🔄 反転・回転', disabled: !(o.image && media.has(o.image)), fn: () => flipMenu(g.sx, g.sy, o) },
       { label: '📋 コピー (Ctrl+C)', fn: () => copySel() },
       { label: '✂️ 切り取り (Ctrl+X)', fn: cutSel },
       { label: '🗑 ノードを削除', fn: () => deleteNode(o) }
@@ -2838,6 +2839,38 @@ async function removeBackground(n) {         // 背景を除いた画像（canva
   const fc = mk(W0, H0), fx = fc.getContext('2d');
   fx.fillStyle = col; fx.fillRect(0, 0, W0, H0); fx.drawImage(oc, 0, 0);
   return fc;
+}
+/* ---------- 反転・回転 ---------- */
+const FLIPS = {
+  flipH: ['↔ 左右反転', '_flipH'], flipV: ['↕ 上下反転', '_flipV'],
+  rotR: ['↻ 右へ90度回転', '_rotR'], rotL: ['↺ 左へ90度回転', '_rotL']
+};
+function flipMenu(x, y, n) { showPopup(x, y, Object.keys(FLIPS).map(k => ({ label: FLIPS[k][0], fn: () => flipRun(n, k) }))); }
+async function flipRun(n, kind) {            // 変形した画像を、元のノードのそばに新しいノードとして追加する
+  if (bgBusy) return toast('処理中です');
+  if (!n.image || !media.has(n.image)) return toast('再リンク済みの画像がありません');
+  bgBusy = true;
+  try {
+    const el = await loadImgEl(n.image);
+    if (!el || !el.naturalWidth) throw new Error('画像を読み込めません');
+    const w = el.naturalWidth, h = el.naturalHeight, turn = kind === 'rotR' || kind === 'rotL';
+    const c = document.createElement('canvas'); c.width = turn ? h : w; c.height = turn ? w : h;
+    const g = c.getContext('2d');
+    if (kind === 'flipH') { g.translate(w, 0); g.scale(-1, 1); }
+    else if (kind === 'flipV') { g.translate(0, h); g.scale(1, -1); }
+    else if (kind === 'rotR') { g.translate(h, 0); g.rotate(Math.PI / 2); }
+    else { g.translate(0, w); g.rotate(-Math.PI / 2); }
+    g.drawImage(el, 0, 0);
+    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+    if (!blob) throw new Error('画像を書き出せませんでした');
+    const fn = registerFile(new File([blob], uniqueName(n.image.replace(/\.[^.]+$/, '') + FLIPS[kind][1] + '.png'), { type: 'image/png' }));
+    generated.add(fn);
+    const p = nearSpot(n), nn = { id: uid(), name: fn, x: p.x, y: p.y, image: null, imageHash: null, pw: null, ph: null };
+    nodes.push(nn);
+    await Promise.race([new Promise(res => applyNodeImage(nn, fn, res)), new Promise(res => setTimeout(res, 5000))]);
+    selectNode(nn.id); updateConnUI(); save(); draw();
+    toast(FLIPS[kind][0].slice(2) + 'した画像を新しいノードとして追加しました：' + fn);
+  } catch (e) { toast('変形できませんでした：' + ((e && e.message) || e)); } finally { bgBusy = false; }
 }
 async function removeBgRun(n) {
   if (bgBusy) return toast('背景を除去中です');
