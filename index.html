@@ -49,6 +49,9 @@
   .btns{display:flex;gap:8px;flex-wrap:wrap}
   .btns button{flex:1}
   #dlgOk,#setOk{background:var(--blue);color:#06121f;border-color:var(--blue)}
+  #descClose{position:fixed;top:calc(62px + env(safe-area-inset-top));right:calc(8px + env(safe-area-inset-right));z-index:7;width:44px;height:44px;border-radius:50%;
+    border:1px solid #ffb84d;background:rgba(27,29,36,.95);color:#ffb84d;font:26px/1 sans-serif;padding:0;cursor:pointer}
+  #descClose[hidden]{display:none}
   #descLayer{position:fixed;inset:0;overflow:hidden;pointer-events:none}
   .dbox{position:absolute;left:0;top:0;transform-origin:0 0;pointer-events:auto;box-sizing:border-box;background:rgba(27,29,36,.92);
     border:1px solid #ffb84d;border-radius:6px;padding:20px 6px 6px;font:11px/14px sans-serif;color:#e8ecf4;white-space:pre-wrap;
@@ -96,6 +99,7 @@
 <body>
 <canvas id="cv"></canvas>
 <div id="descLayer"></div>
+<button id="descClose" type="button" aria-label="説明文を閉じる" hidden>×</button>
 
 <div id="ui">
   <div class="row">
@@ -2419,7 +2423,7 @@ async function lmTagOne(base, model, n, signal, vocab, existing) {
 }
 const strHash = t => { let h = 5381; for (let i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
 const descKeyOf = (model, n) => 'desc2|' + model + '|' + strHash(descPrompt()) + '|' + embKey(n);
-const mKey = (a, b) => 'P4:' + strHash(a + '||' + b);   // 矢印の説明文の索引（前後ノードの説明文が変わると別物になる）
+const mKey = (a, b) => 'P5:' + strHash(a + '||' + b);   // 矢印の説明文の索引（前後ノードの説明文が変わると別物になる）
 /* 選択中のノード（最大4つ）のタグ表示の下に、英語の説明文を表示する */
 const DESC_MAX_SEL = 4, DESC_MAX_SCALE = 1.2;
 const descBoxes = new Map();                 // 表示中の説明文ボックス（キー → 要素）。文字は変わったときだけ書き換える（選択範囲を保つため）
@@ -2436,6 +2440,7 @@ function arrowPromptText(a) {                // 1行目：先頭フレームの�
   const f = nodeById(a.from), t = nodeById(a.to), fd = nodeDesc(f), td = nodeDesc(t), m = fd && td && descIdx.get(mKey(fd, td));
   return m ? [fileOf(f), fileOf(t), m.replace(/\s*\n\s*/g, ' ').trim()].join('\n') : null;
 }
+let descClosedFor = '';                      // ×で閉じたときの、そのときの表示対象（選択を変えると再び表示する）
 function drawDescs() {                       // render の最後に呼ぶ：選択中のノード・矢印のファイル名と説明文を、キャンバスに合わせて配置する
   descLoad();
   const items = [];
@@ -2450,6 +2455,8 @@ function drawDescs() {                       // render の最後に呼ぶ：選�
     const idx = fd && td ? mKey(fd, td) : '';
     items.push({ k: 'a' + a.id, name: a.video || provName(a), prov: !a.video, idx, cx: an.cx, top: an.top + tagH(a) + 4, W: 300, txt: (idx && descIdx.get(idx)) || '' });
   }
+  const itemsKey = items.map(i => i.k).join(',');
+  if (!items.length) descClosedFor = ''; else if (itemsKey === descClosedFor) items.length = 0;
   const layer = $('#descLayer'), live = new Set();
   items.forEach(it => {
     live.add(it.k);
@@ -2481,7 +2488,15 @@ function drawDescs() {                       // render の最後に呼ぶ：選�
     el.style.transform = `translate(${view.x + it.cx * view.s - it.W / 2 * bs}px,${view.y + it.top * view.s}px) scale(${bs})`;
   });
   for (const [k, el] of descBoxes) if (!live.has(k) && document.activeElement !== el.lastChild) { el.remove(); descBoxes.delete(k); }
+  let full = false;                          // 説明文が画面の半分以上を覆っているときは、右上に閉じる×を出す
+  descBoxes.forEach(el => {
+    const r = el.getBoundingClientRect(), iw = Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0)), ih = Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0));
+    if (iw * ih >= innerWidth * innerHeight * 0.5) full = true;
+  });
+  $('#descClose').hidden = !full;
+  $('#descClose').dataset.key = itemsKey;
 }
+$('#descClose').onclick = () => { descClosedFor = $('#descClose').dataset.key || ''; draw(); };
 function commitDesc(el, t) {                 // 手で直した説明文を保存する（空にした場合は元に戻す）
   const v = t.innerText.replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim(), old = el.dataset.txt, idx = el.dataset.idx;
   if (!v) { t.textContent = old; return; }
@@ -2568,8 +2583,8 @@ async function lmMotion(base, model, fd, td, tags, signal) {
     '- Output ONE paragraph of 60 to 110 words, written in English except for the Japanese dialogue line described below (not counted in the words). No labels except "Sound:" and "Dialogue:" below, no bullet points, no explanation.',
     (MOTION_CAM ? '- Start with the tag ' + MOTION_CAM + ', then continue in the same paragraph.\n' : '') + '- First describe the movement in present tense and chronological order: what moves first, what follows, with smooth natural motion verbs and gentle pacing words (slowly, smoothly, gradually). Finish the movement with the character settling into the pose of the last frame.',
     '- Describe only the character\'s own movement: body, head, gaze, expression, arms, hands, legs. Do not mention "first frame", "last frame", "image" or "description". Do not describe the background, clothing, colors or art style. Do not invent objects or props. No camera movement.',
-    '- Then add one sentence that starts with "Sound:". List the sound effects that this movement would make, in the order they happen (for example fabric rustling, soft footsteps, a hand brushing hair, light breathing, a small impact), then end with one ambient sound that fits the setting (use the scene tags when they help; otherwise a quiet indoor room tone). Only include sounds that the movement would physically cause. No music, no singing.',
-    '- Finally add one sentence that starts with "Dialogue:" containing ONE short line of Japanese speech (5 to 20 characters, written in natural spoken Japanese inside 「」) that the character would say with this expression, gesture and mood, followed by a brief English note on the voice (for example softly, cheerfully, in a whisper). Infer the line from the expression and the movement. Do not repeat the descriptions; the line must be a plausible utterance, not a narration.',
+    '- Then add one sentence that starts with "Sound:". List the sound effects that this movement would make, in the order they happen (for example fabric rustling, soft footsteps, a hand brushing hair, light breathing, a small impact), then end with one ambient sound that fits the setting (use the scene tags when they help; otherwise a quiet indoor room tone). Include sounds that the movement would physically cause. Breath and mouth sounds are also allowed when the expression or movement suggests them: a breathy exhale (吐息), a sigh (溜息), a tongue click (舌打ち), chewing (咀嚼音), blowing into an ear(耳フー音),licking an ear(耳舐め音),sucking(チュパ音),kissing(キス音); write them in English. No music, no singing.',
+    '- Finally add one sentence that starts with "Dialogue:" containing ONE short line of Japanese speech (5 to 20 characters, written in natural spoken Japanese inside 「」) that the character would say with this expression, gesture and mood, followed by a brief English note on the voice (for example softly, cheerfully, in a whisper). Infer the line from the expression and the movement. Do not repeat the descriptions; the line must be a plausible utterance, not a narration. When it fits the expression and movement, the Dialogue sentence may instead (or additionally) contain a non-verbal vocal sound written in Japanese inside 「」: a soft breath (吐息, for example 「はぁ…」), a sigh (溜息, for example 「はぁ…」「ふぅ…」), a tongue click (舌打ち, for example 「ちっ」) or chewing sounds (咀嚼音, for example 「もぐもぐ」).',
     ...vocabLines()
   ];
   const t = await lmChatText(base, model, 'You write concise, vivid motion-and-sound prompts for a first-and-last-frame-to-video generator with audio (MiniMax Hailuo style).', p.join('\n'), signal, 500);
