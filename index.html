@@ -185,8 +185,8 @@
       <button type="button" data-tab="bg">背景除去</button>
     </div>
     <div class="tabp" data-tab="std">
-      <label>静止画の再生秒数（秒）
-        <input id="setStill" type="number" min="0.1" max="60" step="0.1" inputmode="decimal">
+      <label>静止画の再生秒数（秒。0にすると静止画を飛ばして、動画だけを連続再生します）
+        <input id="setStill" type="number" min="0" max="60" step="0.1" inputmode="decimal">
       </label>
       <label>同じ箇所の最大ループ回数
         <input id="setLoop" type="number" min="1" max="99" step="1" inputmode="numeric">
@@ -3260,7 +3260,7 @@ const SET_KEY = 'keyframe-map.settings.v1';
 const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', descFmt: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true, upscaled: true, bgThr: 50, bgColor: 'transparent', bgCustom: '#ff00ff', bgModel: '', soundOk: '吐息, 溜息, 舌打ち, 咀嚼音' };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
 try {
   const o = JSON.parse(localStorage.getItem(SET_KEY) || '{}');
-  if (isFinite(o.still) && o.still > 0) settings.still = clamp(+o.still, 0.1, 60);
+  if (isFinite(o.still) && o.still >= 0) settings.still = clamp(+o.still, 0, 60);
   if (isFinite(o.loop) && o.loop >= 1) settings.loop = clamp(Math.round(+o.loop), 1, 99);
   for (const k of ['lmUrl', 'lmModel', 'lmEmb', 'descFmt', 'vocab', 'vocabNg', 'soundOk', 'bgColor', 'bgCustom', 'bgModel']) if (typeof o[k] === 'string') settings[k] = o[k];
   if (typeof o.noThink === 'boolean') settings.noThink = o.noThink;
@@ -3287,7 +3287,7 @@ $('#setBgThr').oninput = $('#setBgColor').onchange = syncBgUI;
 $('#setDescFmtReset').onclick = () => { $('#setDescFmt').value = DESC_FMT_DEFAULT; };
 $('#setOk').onclick = () => {
   const st = parseFloat($('#setStill').value), lp = parseInt($('#setLoop').value, 10);
-  settings.still = isFinite(st) && st > 0 ? clamp(Math.round(st * 10) / 10, 0.1, 60) : settings.still;
+  settings.still = isFinite(st) && st >= 0 ? clamp(Math.round(st * 10) / 10, 0, 60) : settings.still;
   settings.loop = isFinite(lp) && lp >= 1 ? clamp(lp, 1, 99) : settings.loop;
   settings.lmUrl = lmBaseOf($('#setLmUrl').value); settings.lmModel = $('#setLmModel').value.trim(); settings.lmEmb = $('#setLmEmb').value.trim(); settings.vocab = $('#setVocab').value.trim();
   settings.vocabNg = $('#setVocabNg').value.trim(); settings.tagMax = clamp(parseInt($('#setTagMax').value, 10) || 8, 1, 20);
@@ -3342,7 +3342,7 @@ const arrowOK = a => !!(a && a.video && media.has(a.video));
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
 function playables() {
   const l = [];
-  nodes.forEach(n => { if (nodeOK(n)) l.push({ k: 'node', id: n.id }); });
+  if (settings.still > 0) nodes.forEach(n => { if (nodeOK(n)) l.push({ k: 'node', id: n.id }); });   // 静止画の秒数が0のときは、動画だけ
   arrows.forEach(a => { if (arrowOK(a)) l.push({ k: 'arrow', id: a.id }); });
   return l;
 }
@@ -3413,6 +3413,10 @@ function playItem(it) {
   stillCtx = null; stillEl = 0; stillT0 = 0; stillTot = 0;
   if (pPaused) setPaused(false);              // 次の項目へ進んだら、一時停止を解除する
   if (!it) return stopPlayer('再生できるメディアがありません');
+  if (it.k === 'node' && settings.still <= 0) {   // 静止画の秒数が0：表示せずに次へ進む（動画だけ連続再生）
+    visits.set(vkey(it), (visits.get(vkey(it)) || 0) + 1);
+    return passThrough(it);
+  }
   nowPlaying = it; revealPlaying(); draw();
   visits.set(vkey(it), (visits.get(vkey(it)) || 0) + 1);
   if (it.k === 'node') {
@@ -3449,7 +3453,7 @@ function openPlayer() {
   closePopups();
   const it = startItem();
   if (!it || !playables().length) {
-    toast('再生できるメディアがありません（画像・動画を指定／再リンクしてください）');
+    toast(settings.still <= 0 && nodes.some(nodeOK) ? '再生できる動画がありません（静止画の再生秒数が0のため、静止画は飛ばします）' : '再生できるメディアがありません（画像・動画を指定／再リンクしてください）');
     return;
   }
   pFail = 0; pHops = 0; pVid.muted = false; visits.clear();
