@@ -38,10 +38,11 @@
   #setDlg[hidden]{display:none}
   #setDlg .card{max-height:calc(100vh - 24px);overflow-y:auto}
   .tabs{display:flex;gap:6px}
-  .tabs button{flex:1;padding:6px 4px;font-size:13px;border-radius:8px;border:1px solid #444a5c;background:transparent;color:var(--fg);cursor:pointer}
+  .tabs button{flex:1;padding:6px 2px;font-size:12px;border-radius:8px;border:1px solid #444a5c;background:transparent;color:var(--fg);cursor:pointer}
   .tabs button.on{border-color:#ffb84d;color:#ffb84d}
   .tabp{display:flex;flex-direction:column;gap:12px}
   .tabp[hidden]{display:none}
+  .card label[hidden]{display:none}
   .card label{display:flex;flex-direction:column;gap:4px;font-size:14px}
   .card .hint{font-size:12px;color:#aab2c5;line-height:1.5}
   body.dragging::after{content:'ここにドロップして画像・動画を再リンク';position:fixed;inset:8px;z-index:80;display:flex;align-items:center;justify-content:center;
@@ -49,7 +50,7 @@
   #modeBtn,#arrBtn{min-width:44px;padding:0 10px;font-size:18px;line-height:1}
   .card{background:#23262f;border:1px solid #444a5c;border-radius:14px;padding:16px;width:min(340px,90vw);
     display:flex;flex-direction:column;gap:12px}
-  .card input,.card textarea{font:inherit;font-size:16px;color:var(--fg);background:var(--bg);border:1px solid #444a5c;
+  .card input,.card textarea,.card select{font:inherit;font-size:16px;color:var(--fg);background:var(--bg);border:1px solid #444a5c;
     border-radius:8px;padding:10px;width:100%;-webkit-user-select:text;user-select:text}
   .btns{display:flex;gap:8px;flex-wrap:wrap}
   .btns button{flex:1}
@@ -164,6 +165,7 @@
       <button type="button" data-tab="std" class="on">標準</button>
       <button type="button" data-tab="lm">LM Studio</button>
       <button type="button" data-tab="tag">タグ・説明文</button>
+      <button type="button" data-tab="bg">背景除去</button>
     </div>
     <div class="tabp" data-tab="std">
       <label>静止画の再生秒数（秒）
@@ -207,6 +209,24 @@
         <input id="setTagMax" type="number" min="1" max="20" step="1" inputmode="numeric">
       </label>
       <div class="hint">語彙を入れると、その中からだけタグを選びます（表記ゆれを防げます）。ネガティブリストのタグは使わせず、返ってきても除外します（全画像に共通するタグなどを外せます）。語彙は、説明文の生成でも、優先する語・使わない語として使われます。</div>
+    </div>
+    <div class="tabp" data-tab="bg" hidden>
+      <label>閾値（0〜100。大きいほど、背景として消える範囲が広がります）：<span id="setBgThrV"></span>
+        <input id="setBgThr" type="range" min="0" max="100" step="1" style="padding:0">
+      </label>
+      <label>背景色
+        <select id="setBgColor">
+          <option value="transparent">透明</option><option value="black">黒</option><option value="green">緑</option>
+          <option value="blue">青</option><option value="white">白</option><option value="custom">任意の色</option>
+        </select>
+      </label>
+      <label id="setBgCustomRow">任意の色
+        <input id="setBgCustom" type="color" style="height:40px;padding:2px">
+      </label>
+      <label>モデルID（空なら briaai/RMBG-1.4）
+        <input id="setBgModel" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="briaai/RMBG-1.4">
+      </label>
+      <div class="hint">長押しメニューの「✂️ 背景を除去」で使います。画像はこの端末の中だけで処理されます（初回のみモデルをダウンロードします）。「透明」以外は、背景をその色で塗ったPNGになります。</div>
     </div>
     <div class="btns">
       <button id="setCancel">キャンセル</button>
@@ -1375,6 +1395,7 @@ function onLong(g) {
       { label: 'ファイル解除', disabled: !o.image, fn: () => { o.image = null; o.imageHash = null; save(); draw(); } },
       { label: '✏️ 名前を変更', fn: () => { const t = prompt('ノード名', o.name); if (t !== null) { o.name = t.trim() || o.name; save(); draw(); } } },
       { label: '🏷 タグ・説明文を追加', fn: () => tagDescMenu(g.sx, g.sy, o) },
+      { label: '✂️ 背景を除去', disabled: !(o.image && media.has(o.image)), fn: () => removeBgRun(o) },
       { label: '📋 コピー (Ctrl+C)', fn: () => copySel() },
       { label: '✂️ 切り取り (Ctrl+X)', fn: cutSel },
       { label: '🗑 ノードを削除', fn: () => deleteNode(o) }
@@ -2732,6 +2753,94 @@ function nestedPositions(order, cw, ch) {    // 階層ごとに左右・上下�
   res.p.forEach(q => { out[q.i] = { x: q.x, y: q.y }; });
   return out;
 }
+/* ---------- 背景除去（ブラウザ内：transformers.js） ---------- */
+const BG_FLAG = 'keyframe-map.bg.ready', BG_DEFAULT = 'briaai/RMBG-1.4';
+const BG_COLORS = { black: '#000000', green: '#00ff00', blue: '#0000ff', white: '#ffffff' };
+let bgP = null, bgPid = '', bgBusy = false;
+async function nodeImageBlob(n) { const f = mediaFile.get(n.image); if (f) return f; return (await fetch(media.get(n.image))).blob(); }
+function nearSpot(n) {                       // 元のノードのそばの、ほかのノードと重ならない位置
+  const b = box(n), w = b.w, h = b.h, g = 30, T = tagH(n);
+  const cands = [[w + g, 0], [0, h + g + T], [-(w + g), 0], [0, -(h + g)], [w + g, h + g + T], [-(w + g), h + g + T], [2 * (w + g), 0], [0, 2 * (h + g + T)]];
+  for (const [dx, dy] of cands) {
+    const x = n.x + dx, y = n.y + dy;
+    if (!nodes.some(m => { const bm = box(m); return Math.abs(m.x - x) < (bm.w + w) / 2 + 8 && Math.abs(m.y - y) < (bm.h + h) / 2 + 8 + tagH(m); })) return { x, y };
+  }
+  return { x: n.x + w + g, y: n.y + h + g + T };
+}
+function loadBg() {                          // モデルは初回だけダウンロードされ、以降はブラウザのキャッシュから読み込まれる
+  const id = settings.bgModel || BG_DEFAULT;
+  if (!bgP || bgPid !== id) {
+    bgPid = id;
+    bgP = (async () => {
+      const T = await import(CLIP_LIB), rmbg = id === BG_DEFAULT;
+      let last = 0;
+      const cb = p => { if (p && p.status === 'progress' && Date.now() - last > 400) { last = Date.now(); toast(`背景除去モデルを読み込み中… ${Math.round(p.progress || 0)}%（初回のみ）`); } };
+      const opt = rmbg ? { config: { model_type: 'custom' } } : {};
+      let model = null;
+      if (navigator.gpu) { try { model = await T.AutoModel.from_pretrained(id, { ...opt, device: 'webgpu', progress_callback: cb }); } catch (_) { model = null; } }
+      if (!model) model = await T.AutoModel.from_pretrained(id, { ...opt, progress_callback: cb });
+      const processor = await T.AutoProcessor.from_pretrained(id, rmbg ? { config: { do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
+        image_mean: [0.5, 0.5, 0.5], feature_extractor_type: 'ImageFeatureExtractor', image_std: [1, 1, 1], resample: 2, rescale_factor: 0.00392156862745098, size: { width: 1024, height: 1024 } } } : {});
+      return { T, model, processor, rmbg };
+    })().catch(e => { bgP = null; throw e; });
+  }
+  return bgP;
+}
+async function bgMask(n) {                   // 画像の各部分が「前景」である度合い（0〜1）を返す
+  const bg = await loadBg(), img = await bg.T.RawImage.fromBlob(await nodeImageBlob(n));
+  const { pixel_values } = await bg.processor(img);
+  const out = await bg.model(bg.rmbg ? { input: pixel_values } : { pixel_values });
+  const t = out.output || out.alphas || out.logits || Object.values(out)[0];
+  const dm = t.dims, h = dm[dm.length - 2], w = dm[dm.length - 1], src = t.data, d = new Float32Array(w * h);
+  let mn = Infinity, mx = -Infinity;
+  for (let i = 0; i < d.length; i++) { const v = +src[i]; d[i] = v; if (v < mn) mn = v; if (v > mx) mx = v; }
+  if (mn < 0 || mx > 1.0001) for (let i = 0; i < d.length; i++) d[i] = 1 / (1 + Math.exp(-d[i]));   // ロジットの場合
+  return { d, w, h };
+}
+async function removeBackground(n) {         // 背景を除いた画像（canvas）を作る。閾値と背景色は設定のとおり
+  const m = await bgMask(n), el = await loadImgEl(n.image);
+  if (!el || !el.naturalWidth) throw new Error('画像を読み込めません');
+  const W0 = el.naturalWidth, H0 = el.naturalHeight, mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+  const mc = mk(m.w, m.h), mctx = mc.getContext('2d'), md = mctx.createImageData(m.w, m.h);
+  for (let i = 0; i < m.d.length; i++) md.data[i * 4 + 3] = Math.round(m.d[i] * 255);
+  mctx.putImageData(md, 0, 0);
+  const sc = mk(W0, H0), sx = sc.getContext('2d', { willReadFrequently: true });
+  sx.imageSmoothingQuality = 'high'; sx.drawImage(mc, 0, 0, W0, H0);       // マスクを元の大きさに拡大
+  const sd = sx.getImageData(0, 0, W0, H0).data;
+  const oc = mk(W0, H0), ox = oc.getContext('2d', { willReadFrequently: true });
+  ox.drawImage(el, 0, 0);
+  const od = ox.getImageData(0, 0, W0, H0), T = clamp(settings.bgThr, 0, 100) / 100, SOFT = 0.05;   // 閾値の前後±0.05 だけ、境目をなめらかにする
+  for (let i = 0; i < W0 * H0; i++) {
+    const v = sd[i * 4 + 3] / 255;
+    const a = T <= 0 ? 1 : T >= 1 ? 0 : clamp((v - (T - SOFT)) / (2 * SOFT), 0, 1);
+    od.data[i * 4 + 3] = Math.round(od.data[i * 4 + 3] * a);
+  }
+  ox.putImageData(od, 0, 0);
+  const col = settings.bgColor === 'custom' ? settings.bgCustom : BG_COLORS[settings.bgColor];
+  if (!col) return oc;                       // 透明
+  const fc = mk(W0, H0), fx = fc.getContext('2d');
+  fx.fillStyle = col; fx.fillRect(0, 0, W0, H0); fx.drawImage(oc, 0, 0);
+  return fc;
+}
+async function removeBgRun(n) {
+  if (bgBusy) return toast('背景を除去中です');
+  if (!n.image || !media.has(n.image)) return toast('再リンク済みの画像がありません');
+  if (!lsGet(BG_FLAG) && !confirm('初回のみ、背景除去モデル（約176MB）をダウンロードします。\nよろしいですか？')) return;
+  bgBusy = true; toast('背景を除去中…');
+  try {
+    const cvs = await removeBackground(n);
+    try { localStorage.setItem(BG_FLAG, '1'); } catch (_) {}
+    const blob = await new Promise(r => cvs.toBlob(r, 'image/png'));
+    if (!blob) throw new Error('画像を書き出せませんでした');
+    const fn = registerFile(new File([blob], uniqueName(n.image.replace(/\.[^.]+$/, '') + '_nobg.png'), { type: 'image/png' }));
+    generated.add(fn);
+    const p = nearSpot(n), nn = { id: uid(), name: fn, x: p.x, y: p.y, image: null, imageHash: null, pw: null, ph: null };
+    nodes.push(nn);
+    await Promise.race([new Promise(res => applyNodeImage(nn, fn, res)), new Promise(res => setTimeout(res, 5000))]);
+    selectNode(nn.id); updateConnUI(); save(); draw();
+    toast('背景を除去した画像を新しいノードとして追加しました：' + fn);
+  } catch (e) { toast('背景を除去できませんでした：' + ((e && e.message) || e)); } finally { bgBusy = false; }
+}
 let lmBusy = false;
 async function descNodeLM(n) {               // ノード：LM Studio で英語の説明文を生成して保存する
   if (lmBusy || tagging) return toast('LM Studioの処理中です');
@@ -3098,14 +3207,15 @@ $('#fsBtn').onclick = async () => {
 const player = $('#player'), pImg = $('#pImg'), pVid = $('#pVid'), pCap = $('#pCap');
 /* 設定（端末のブラウザに保存） */
 const SET_KEY = 'keyframe-map.settings.v1';
-const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', descFmt: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true, upscaled: true, soundOk: '吐息, 溜息, 舌打ち, 咀嚼音' };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
+const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', descFmt: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true, upscaled: true, bgThr: 50, bgColor: 'transparent', bgCustom: '#ff00ff', bgModel: '', soundOk: '吐息, 溜息, 舌打ち, 咀嚼音' };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
 try {
   const o = JSON.parse(localStorage.getItem(SET_KEY) || '{}');
   if (isFinite(o.still) && o.still > 0) settings.still = clamp(+o.still, 0.1, 60);
   if (isFinite(o.loop) && o.loop >= 1) settings.loop = clamp(Math.round(+o.loop), 1, 99);
-  for (const k of ['lmUrl', 'lmModel', 'lmEmb', 'descFmt', 'vocab', 'vocabNg', 'soundOk']) if (typeof o[k] === 'string') settings[k] = o[k];
+  for (const k of ['lmUrl', 'lmModel', 'lmEmb', 'descFmt', 'vocab', 'vocabNg', 'soundOk', 'bgColor', 'bgCustom', 'bgModel']) if (typeof o[k] === 'string') settings[k] = o[k];
   if (typeof o.noThink === 'boolean') settings.noThink = o.noThink;
   if (typeof o.upscaled === 'boolean') settings.upscaled = o.upscaled;
+  if (isFinite(o.bgThr)) settings.bgThr = clamp(Math.round(+o.bgThr), 0, 100);
   if (isFinite(o.tagMax) && o.tagMax >= 1) settings.tagMax = clamp(Math.round(+o.tagMax), 1, 20);
 } catch (_) {}
 $('#setBtn').onclick = () => {
@@ -3113,7 +3223,7 @@ $('#setBtn').onclick = () => {
   $('#setStill').value = settings.still; $('#setLoop').value = settings.loop;
   $('#setLmUrl').value = settings.lmUrl; $('#setLmModel').value = settings.lmModel; $('#setLmEmb').value = settings.lmEmb; $('#setVocab').value = settings.vocab; $('#setNoThink').checked = settings.noThink; $('#setUpscaled').checked = settings.upscaled;
   $('#setVocabNg').value = settings.vocabNg; $('#setTagMax').value = settings.tagMax;
-  $('#setDescFmt').value = descFields().join('\n'); $('#setSoundOk').value = settings.soundOk;
+  $('#setDescFmt').value = descFields().join('\n'); $('#setSoundOk').value = settings.soundOk; $('#setBgThr').value = settings.bgThr; $('#setBgColor').value = settings.bgColor; $('#setBgCustom').value = settings.bgCustom; $('#setBgModel').value = settings.bgModel; syncBgUI();
   $('#setDlg').hidden = false;
 };
 document.querySelectorAll('#setTabs button').forEach(b => { b.onclick = () => {       // 設定のタブの切り替え
@@ -3122,6 +3232,8 @@ document.querySelectorAll('#setTabs button').forEach(b => { b.onclick = () => { 
 }; });
 $('#setCancel').onclick = () => { $('#setDlg').hidden = true; };
 $('#setLmTest').onclick = lmTest;
+function syncBgUI() { $('#setBgThrV').textContent = $('#setBgThr').value; $('#setBgCustomRow').hidden = $('#setBgColor').value !== 'custom'; }
+$('#setBgThr').oninput = $('#setBgColor').onchange = syncBgUI;
 $('#setDescFmtReset').onclick = () => { $('#setDescFmt').value = DESC_FMT_DEFAULT; };
 $('#setOk').onclick = () => {
   const st = parseFloat($('#setStill').value), lp = parseInt($('#setLoop').value, 10);
@@ -3130,7 +3242,7 @@ $('#setOk').onclick = () => {
   settings.lmUrl = lmBaseOf($('#setLmUrl').value); settings.lmModel = $('#setLmModel').value.trim(); settings.lmEmb = $('#setLmEmb').value.trim(); settings.vocab = $('#setVocab').value.trim();
   settings.vocabNg = $('#setVocabNg').value.trim(); settings.tagMax = clamp(parseInt($('#setTagMax').value, 10) || 8, 1, 20);
   { const l = descFmtList($('#setDescFmt').value).join('\n'); settings.descFmt = l === DESC_FMT_DEFAULT ? '' : l; }   // 初期値のままなら空にして、今後の初期値の変更に追従する
-  settings.upscaled = $('#setUpscaled').checked; settings.soundOk = $('#setSoundOk').value.trim();
+  settings.upscaled = $('#setUpscaled').checked; settings.soundOk = $('#setSoundOk').value.trim(); settings.bgThr = clamp(parseInt($('#setBgThr').value, 10) || 0, 0, 100); settings.bgColor = $('#setBgColor').value; settings.bgCustom = $('#setBgCustom').value; settings.bgModel = $('#setBgModel').value.trim();
   settings.noThink = $('#setNoThink').checked; lmPrefillOK = lmSchemaOK = true;   // 設定を変えたら対応状況の判定をやり直す
   try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (_) {}
   $('#setDlg').hidden = true; toast('設定を保存しました');
