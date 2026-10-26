@@ -37,8 +37,8 @@
   #setDlg{position:fixed;inset:0;z-index:70;background:#0008;display:flex;align-items:center;justify-content:center}
   #setDlg[hidden]{display:none}
   #setDlg .card{max-height:calc(100vh - 24px);overflow-y:auto}
-  .tabs{display:flex;gap:6px}
-  .tabs button{flex:1;padding:6px 2px;font-size:12px;border-radius:8px;border:1px solid #444a5c;background:transparent;color:var(--fg);cursor:pointer}
+  .tabs{display:flex;flex-wrap:wrap;gap:6px}
+  .tabs button{flex:1 1 auto;padding:6px 2px;font-size:12px;border-radius:8px;border:1px solid #444a5c;background:transparent;color:var(--fg);cursor:pointer}
   .tabs button.on{border-color:#ffb84d;color:#ffb84d}
   .tabp{display:flex;flex-direction:column;gap:12px}
   .tabp[hidden]{display:none}
@@ -181,12 +181,19 @@
     <div id="setTabs" class="tabs">
       <button type="button" data-tab="std" class="on">標準</button>
       <button type="button" data-tab="lm">LM Studio</button>
+      <button type="button" data-tab="gm">Gemini</button>
       <button type="button" data-tab="tag">タグ・説明文</button>
       <button type="button" data-tab="bg">背景除去</button>
     </div>
     <div class="tabp" data-tab="std">
       <label>静止画の再生秒数（秒。0にすると静止画を飛ばして、動画だけを連続再生します）
         <input id="setStill" type="number" min="0" max="60" step="0.1" inputmode="decimal">
+      </label>
+      <label>キャンバスのズーム倍率の下限（0.01〜1。初期値 0.15）
+        <input id="setZoomMin" type="number" min="0.01" max="1" step="0.01" inputmode="decimal">
+      </label>
+      <label>キャンバスのズーム倍率の上限（1〜20。初期値 5）
+        <input id="setZoomMax" type="number" min="1" max="20" step="0.5" inputmode="decimal">
       </label>
       <label>同じ箇所の最大ループ回数
         <input id="setLoop" type="number" min="1" max="99" step="1" inputmode="numeric">
@@ -211,6 +218,16 @@
       </label>
       <div class="hint">矢印の説明文（動画プロンプト）で、セリフや効果音のほかに書いてよい、言葉でない声・口の音です。このリストにあるものだけが使われます。画像は上のURLのサーバーにだけ送られます。</div>
       <div class="btns"><button id="setLmTest">🔌 接続テスト</button></div>
+    </div>
+    <div class="tabp" data-tab="gm" hidden>
+      <label>Gemini API キー
+        <input id="setGmKey" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="AIza…">
+      </label>
+      <label>モデルID（空なら gemini-2.5-flash）
+        <input id="setGmModel" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="gemini-2.5-flash">
+      </label>
+      <div class="btns"><button id="setGmTest" type="button">🔌 接続テスト</button></div>
+      <div class="hint">長押しメニューの「✨ Geminiでタグ付け」「✨ Geminiで説明文を追加」と、🛠 編集メニューの「✨ 画像にタグ付け（Gemini）」で使います。タグの語彙・説明文の項目などの設定は、LM Studio と共通です。画像（キャラクター部分を切り出して縮小したもの）は Google の Gemini API に送信され、API キーはこの端末のブラウザにだけ保存されます。</div>
     </div>
     <div class="tabp" data-tab="tag" hidden>
       <label>埋め込みモデルID（説明文の類似度ソート用・空なら自動選択）
@@ -1169,7 +1186,8 @@ $('#arrBtn').onclick = e => {
     { label: '🏷 タグの類似度でソート', fn: () => arrange('tag') },
     { label: '🖼 画像の類似度でソート', fn: () => arrange('image') },
     { label: '🖼 説明文の項目でソート（LM Studio・英語の説明文）', fn: () => arrange('imageLM') },
-    { label: tagging ? '⏹ タグ付けを中止' : '🤖 画像にタグ付け（LM Studio）', fn: () => autoTagLM() }
+    { label: tagging ? '⏹ タグ付けを中止' : '🤖 画像にタグ付け（LM Studio）', fn: () => autoTagLM() },
+    { label: tagging ? '⏹ タグ付けを中止' : '✨ 画像にタグ付け（Gemini）', fn: () => autoTagLM(null, 'gemini') }
   ]);
 };
 $('#fileBtn').onclick = e => {
@@ -1211,9 +1229,12 @@ function tagDescMenu(x, y, o) {              // ノード・矢印のサブメ�
     { label: '🏷 タグを追加', fn: () => tagAddMenu(x, y, [o]) },
     ...(node ? [
       { label: tagging ? '⏹ タグ付けを中止' : '🤖 LM Studioでタグ付け', disabled: !tagging && !has(o), fn: () => autoTagLM(o) },
-      { label: '📝 LM Studioで説明文を追加', disabled: !has(o), fn: () => descNodeLM(o) }
+      { label: '📝 LM Studioで説明文を追加', disabled: !has(o), fn: () => descNodeLM(o) },
+      { label: tagging ? '⏹ タグ付けを中止' : '✨ Geminiでタグ付け', disabled: !tagging && !has(o), fn: () => autoTagLM(o, 'gemini') },
+      { label: '✨ Geminiで説明文を追加', disabled: !has(o), fn: () => descNodeLM(o, 'gemini') }
     ] : [
-      { label: '📝 LM Studioで説明文を追加（前後の静止画から動きを推測）', disabled: isFree(o) || !(has(nodeById(o.from)) && has(nodeById(o.to))), fn: () => descArrowLM(o) }
+      { label: '📝 LM Studioで説明文を追加（前後の静止画から動きを推測）', disabled: isFree(o) || !(has(nodeById(o.from)) && has(nodeById(o.to))), fn: () => descArrowLM(o) },
+      { label: '✨ Geminiで説明文を追加（前後の静止画から動きを推測）', disabled: isFree(o) || !(has(nodeById(o.from)) && has(nodeById(o.to))), fn: () => descArrowLM(o, 'gemini') }
     ])
   ]);
 }
@@ -1648,7 +1669,7 @@ cv.addEventListener('pointermove', e => {
       else { t.o.vw = nw; t.o.vh = t.h0 * k; }
       view.x = g.v0.x + c.x - g.c0.x; view.y = g.v0.y + c.y - g.c0.y;   // 2本指スワイプでキャンバス移動
     } else {
-      const s = clamp(g.v0.s * r, 0.15, 5);
+      const s = clamp(g.v0.s * r, settings.zoomMin, settings.zoomMax);
       view.s = s; view.x = c.x - g.wc.x * s; view.y = c.y - g.wc.y * s;
     }
     draw(); return;
@@ -1718,7 +1739,7 @@ document.addEventListener('gesturestart', e => e.preventDefault());
 function zoomWheel(e) {
   e.preventDefault();
   const w = toWorld(e.clientX, e.clientY);
-  const s = clamp(view.s * Math.exp(-e.deltaY * 0.0015), 0.15, 5);
+  const s = clamp(view.s * Math.exp(-e.deltaY * 0.0015), settings.zoomMin, settings.zoomMax);
   view.s = s; view.x = e.clientX - w.x * s; view.y = e.clientY - w.y * s;
   draw();
 }
@@ -2423,6 +2444,53 @@ async function lmTest() {                    // 設定ダイアログの「接�
     toast(ids.length ? `接続できました（${base}）。モデル：${ids.slice(0, 6).join('、')}${ids.length > 6 ? ' ほか' : ''}` : '接続できましたが、モデルが見つかりません');
   } catch (e) { toast(e.message); }
 }
+/* ---------- Gemini API（APIキーで、タグ付け・説明文の生成を行う） ---------- */
+/* LM Studio と同じ関数を使い回すため、base に GM_SRC を渡したときは Gemini へ送る */
+const GM_SRC = 'gemini:', GM_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+let gmSchemaOK = true;
+const gmModel = () => (settings.gmModel || '').trim() || 'gemini-2.5-flash';
+const dataPart = url => ({ inline_data: { mime_type: 'image/jpeg', data: url.slice(url.indexOf(',') + 1) } });
+async function gmCall(model, system, parts, opt, signal) {
+  const key = (settings.gmKey || '').trim();
+  if (!key) throw new Error('設定の Gemini タブで API キーを入力してください');
+  const gc = { temperature: opt.temp == null ? 0.2 : opt.temp, maxOutputTokens: opt.maxTok || 4096 };   // 思考に使われる分も見込んで多めにする
+  if (opt.schema) { gc.responseMimeType = 'application/json'; gc.responseSchema = opt.schema; }
+  const body = { systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts }], generationConfig: gc };
+  const ac = new AbortController(); let to = false;
+  const t = setTimeout(() => { to = true; ac.abort(); }, 120000), onAb = () => ac.abort();
+  if (signal) signal.addEventListener('abort', onAb, { once: true });
+  let r;
+  try {
+    r = await fetch(GM_BASE + '/models/' + encodeURIComponent(model) + ':generateContent', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(body), signal: ac.signal });
+  } catch (e) {
+    if (to) throw new Error('Geminiの応答がタイムアウトしました');
+    if (signal && signal.aborted) throw e;
+    const er = new Error('Geminiに接続できません（ネットワークを確認してください）'); er.conn = true; throw er;
+  } finally { clearTimeout(t); if (signal) signal.removeEventListener('abort', onAb); }
+  let j = null; try { j = await r.json(); } catch (_) {}
+  if (!r.ok) {
+    const msg = (j && j.error && j.error.message) || ('HTTP ' + r.status);
+    const er = new Error(`Geminiがエラーを返しました（${r.status}）：${String(msg).slice(0, 120)}`);
+    er.status = r.status; if (r.status === 401 || r.status === 403 || /API key/i.test(msg)) er.conn = true;   // キーの誤りなどは、残りも試さない
+    throw er;
+  }
+  const c = j && j.candidates && j.candidates[0];
+  const txt = ((c && c.content && c.content.parts) || []).map(p => p.text || '').join('').trim();
+  if (!txt) throw new Error('Geminiの応答が空でした（' + ((j && j.promptFeedback && j.promptFeedback.blockReason) || (c && c.finishReason) || '理由不明') + '）');
+  return txt;
+}
+async function gmTest() {                    // 設定ダイアログの「接続テスト」（入力中のキー・モデルで確認）
+  const key = $('#setGmKey').value.trim(), model = $('#setGmModel').value.trim() || 'gemini-2.5-flash';
+  if (!key) return toast('API キーを入力してください');
+  toast('接続を確認中…');
+  try {
+    const r = await fetch(GM_BASE + '/models/' + encodeURIComponent(model), { headers: { 'x-goog-api-key': key } });
+    const j = await r.json().catch(() => null);
+    if (!r.ok) throw new Error((j && j.error && j.error.message) || ('HTTP ' + r.status));
+    toast(`接続できました：${j.displayName || j.name || model}`);
+  } catch (e) { toast('接続できません：' + String((e && e.message) || e).slice(0, 120)); }
+}
 const lmList = s => cleanTags((s || '').split(/[,，、\n]/));
 const lmNorm = t => String(t).normalize('NFKC').toLowerCase();   // 全角・半角、大文字・小文字を区別しない
 const lmMax = () => clamp(Math.round(+settings.tagMax) || 8, 1, 20);
@@ -2451,6 +2519,13 @@ async function lmTagOne(base, model, n, signal, vocab, existing) {
   if (ngList.length) rules.push('・次のタグは使わない：' + ngList.join('、'));
   rules.push('出力は {"tags":["…","…"]} のJSONのみ。');
   const schema = { type: 'object', properties: { tags: { type: 'array', maxItems: max, items: vocab.length ? { type: 'string', enum: vocab } : { type: 'string' } } }, required: ['tags'] };
+  let txt;
+  if (base === GM_SRC) {                      // Gemini
+    const gs = { type: 'OBJECT', properties: { tags: { type: 'ARRAY', maxItems: max, items: vocab.length ? { type: 'STRING', enum: vocab } : { type: 'STRING' } } }, required: ['tags'] };
+    const parts = [{ text: rules.join('\n') }, dataPart(url)], sys = 'あなたはキャラクターのキーフレーム画像にタグを付けるアシスタントです。';
+    try { txt = await gmCall(model, sys, parts, { schema: gmSchemaOK ? gs : null, maxTok: 4096 }, signal); }
+    catch (e) { if (e.status === 400 && gmSchemaOK) { gmSchemaOK = false; txt = await gmCall(model, sys, parts, { maxTok: 4096 }, signal); } else throw e; }
+  } else {
   const post = async (withSchema, withPrefill) => {
     const body = { model, temperature: 0.2, max_tokens: 800, stream: false,
       messages: [
@@ -2468,11 +2543,12 @@ async function lmTagOne(base, model, n, signal, vocab, existing) {
   }
   const bad = async x => new Error(`LM Studioがエラーを返しました（HTTP ${x.status}）：${(await x.text()).slice(0, 100)}`);
   if (!r.ok) throw await bad(r);
-  let txt = lmText(await lmJson(r));
+  txt = lmText(await lmJson(r));
   if (!txt.trim() && pre) {                   // 先頭の返答の指定で空になるモデルは、指定なしでやり直す
     lmPrefillOK = false; r = await post(sc, false);
     if (!r.ok) throw await bad(r);
     txt = lmText(await lmJson(r));
+  }
   }
   let tags;
   try { const m = txt.match(/\{[\s\S]*\}/); tags = JSON.parse(m ? m[0] : txt).tags; } catch (_) { tags = txt.split(/[,，、\n]/); }
@@ -2543,7 +2619,9 @@ function drawDescs() {                       // render の最後に呼ぶ：選�
     t.style.display = b.style.display = it.txt ? '' : 'none';     // 説明文がないときはファイル名だけ表示する
     if (el.dataset.txt !== it.txt && document.activeElement !== t) { el.dataset.txt = it.txt; t.textContent = it.txt; }
     el.style.width = it.W + 'px';
-    const bs = Math.min(view.s, DESC_MAX_SCALE);   // 拡大しても、ボックスが画面を覆わないよう大きさに上限を設ける（位置は拡大率に追従）
+    const h0 = el.offsetHeight || 1;
+    // 拡大しても、ボックスが画面を覆わないよう、キャンバスの余白（画面の幅・高さの4割）が残る大きさに上限を設ける（位置は拡大率に追従）
+    const bs = Math.min(view.s, DESC_MAX_SCALE, innerWidth * 0.6 / it.W, innerHeight * 0.6 / h0);
     el.style.transform = `translate(${view.x + it.cx * view.s - it.W / 2 * bs}px,${view.y + it.top * view.s}px) scale(${bs})`;
   });
   for (const [k, el] of descBoxes) if (!live.has(k) && document.activeElement !== el.lastChild) { el.remove(); descBoxes.delete(k); }
@@ -2609,6 +2687,11 @@ function descPrompt() {
   ].join('\n');
 }
 async function lmChatText(base, model, system, user, signal, maxTok) {   // テキストを返すチャット呼び出し（思考なし指定の自動切替つき）
+  if (base === GM_SRC) {                      // Gemini
+    const parts = typeof user === 'string' ? [{ text: user }] : user.map(q => q.type === 'text' ? { text: q.text } : dataPart(q.image_url.url));
+    const t = await gmCall(model, system, parts, { temp: 0, maxTok: 4096 }, signal);
+    return t.replace(/[*#`]/g, '').replace(/\n{2,}/g, '\n').slice(0, 1200);
+  }
   const post = pre => {
     const msgs = [{ role: 'system', content: system }, { role: 'user', content: user }];
     if (pre) msgs.push({ role: 'assistant', content: NO_THINK });
@@ -2918,7 +3001,7 @@ const lmQ = []; let lmQRun = false;
 function lmEnqueue(key, label, fn) {
   if (lmQ.some(q => q.key === key)) return toast('すでに処理待ちです：' + label);
   lmQ.push({ key, label, fn });
-  if (lmQRun || lmBusy || tagging) toast(`LM Studioの処理待ちに追加しました：${label}（待ち ${lmQ.length} 件）`);
+  if (lmQRun || lmBusy || tagging) toast(`処理待ちに追加しました：${label}（待ち ${lmQ.length} 件）`);
   lmPump();
 }
 async function lmPump() {
@@ -2931,27 +3014,27 @@ async function lmPump() {
     }
   } finally { lmQRun = false; }
 }
-const descNodeLM = n => lmEnqueue('n' + n.id, 'ノード「' + (n.name || n.image) + '」の説明文', () => descNodeRun(n));
-const descArrowLM = a => lmEnqueue('a' + a.id, '矢印の説明文', () => descArrowRun(a));
-async function descNodeRun(n) {                // ノード：LM Studio で英語の説明文を生成して保存する
+const descNodeLM = (n, prov) => lmEnqueue('n' + n.id + (prov || ''), 'ノード「' + (n.name || n.image) + '」の説明文', () => descNodeRun(n, prov));
+const descArrowLM = (a, prov) => lmEnqueue('a' + a.id + (prov || ''), '矢印の説明文', () => descArrowRun(a, prov));
+async function descNodeRun(n, prov) {                // ノード：LM Studio で英語の説明文を生成して保存する
   if (!n.image || !media.has(n.image)) return toast('再リンク済みの画像がありません');
   lmBusy = true; descLoad();
   try {
     if (hashJobs.size) await Promise.all([...hashJobs.values()]);
-    const base = lmBaseOf(settings.lmUrl), model = await lmModelId(base);
+    const gm = prov === 'gemini', base = gm ? GM_SRC : lmBaseOf(settings.lmUrl), model = gm ? gmModel() : await lmModelId(base);
     toast(`説明文を生成中…（${model}）`);
     const d = await lmDescribe(base, model, n);
     descPut(descKeyOf(model, n), embKey(n), d); descSave();
     draw(); toast('説明文を追加しました（ノードを選択すると表示されます）');
   } catch (e) { toast(e.message); } finally { lmBusy = false; }
 }
-async function descArrowRun(a) {               // 矢印：前後のノードの説明文の変化から動きを推測して保存する
+async function descArrowRun(a, prov) {               // 矢印：前後のノードの説明文の変化から動きを推測して保存する
   const f = nodeById(a.from), t = nodeById(a.to), ok = n => n && n.image && media.has(n.image);
   if (!ok(f) || !ok(t)) return toast('前後の両方のノードに、再リンク済みの画像が必要です');
   lmBusy = true; descLoad();
   try {
     if (hashJobs.size) await Promise.all([...hashJobs.values()]);
-    const base = lmBaseOf(settings.lmUrl), model = await lmModelId(base);
+    const gm = prov === 'gemini', base = gm ? GM_SRC : lmBaseOf(settings.lmUrl), model = gm ? gmModel() : await lmModelId(base);
     const get = async n => {                 // 説明文がなければ先にノードの説明文を生成する
       let d = descCache.get(descKeyOf(model, n)) || descIdx.get(embKey(n));
       if (!d) { toast(`ノード「${n.name}」の説明文を生成中…`); d = await lmDescribe(base, model, n); descPut(descKeyOf(model, n), embKey(n), d); }
@@ -2964,7 +3047,7 @@ async function descArrowRun(a) {               // 矢印：前後のノードの
     draw(); toast('説明文を追加しました（矢印を選択すると表示されます）');
   } catch (e) { toast(e.message); } finally { lmBusy = false; }
 }
-async function autoTagLM(only) {
+async function autoTagLM(only, prov) {
   if (tagging) { if (confirm('タグ付けを中止しますか？')) tagging.abort(); return; }
   closePopups();
   // 対象：ノードを選択中ならその画像ノード、なければタグのない画像ノードすべて
@@ -2972,13 +3055,14 @@ async function autoTagLM(only) {
   const picked = !!only || sel.nodes.length > 0;
   if (!picked) list = nodes.filter(n => n.image && media.has(n.image) && !(n.tags && n.tags.length));
   if (!list.length) return toast(picked ? '選択したノードに、再リンク済みの画像がありません' : 'タグのない画像ノードがありません（ノードを選択すると、選択分にタグを追加します）');
-  const base = lmBaseOf(settings.lmUrl);
-  if (!confirm(`${list.length} 件の画像を ${base} に送ってタグ付けします。よろしいですか？`)) return;
+  const gm = prov === 'gemini', base = gm ? GM_SRC : lmBaseOf(settings.lmUrl);
+  if (gm && !(settings.gmKey || '').trim()) return toast('設定の Gemini タブで API キーを入力してください');
+  if (!confirm(`${list.length} 件の画像を ${gm ? 'Google の Gemini API' : base} に送ってタグ付けします。よろしいですか？`)) return;
   const ac = new AbortController(); tagging = ac;
   const vocab = lmList(settings.vocab);
   let ok = 0, fail = 0, firstErr = '';
   try {
-    const model = await lmModelId(base, ac.signal);
+    const model = gm ? gmModel() : await lmModelId(base, ac.signal);
     for (let i = 0; i < list.length && !ac.signal.aborted; i++) {
       toast(`タグ付け中… ${i + 1}/${list.length}（${model}）`);
       try {
@@ -3200,7 +3284,7 @@ function centerOnNodes() {                   // 全ノードの中心が画面�
 function fitView(outOnly) {                  // 全体が画面に収まるように表示を合わせる（outOnly：拡大はせず、必要なときだけ縮小する）
   const bb = contentBox(false); if (!bb) return;
   const bw = bb.x1 - bb.x0, bh = bb.y1 - bb.y0;
-  let s = clamp(Math.min((W - 32) / bw, (H - 130) / bh), 0.15, 1);
+  let s = clamp(Math.min((W - 32) / bw, (H - 130) / bh), Math.min(settings.zoomMin, 1), 1);
   if (outOnly) s = Math.min(view.s, s);
   view.s = s; view.x = W / 2 - (bb.x0 + bw / 2) * s; view.y = (H + 60) / 2 - (bb.y0 + bh / 2) * s;
 }
@@ -3297,20 +3381,23 @@ $('#fsBtn').onclick = async () => {
 const player = $('#player'), pImg = $('#pImg'), pVid = $('#pVid'), pCap = $('#pCap');
 /* 設定（端末のブラウザに保存） */
 const SET_KEY = 'keyframe-map.settings.v1';
-const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', descFmt: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true, upscaled: true, bgThr: 50, bgColor: 'transparent', bgCustom: '#ff00ff', bgModel: '', soundOk: '吐息, 溜息, 舌打ち, 咀嚼音' };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
+const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', descFmt: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true, upscaled: true, bgThr: 50, bgColor: 'transparent', bgCustom: '#ff00ff', bgModel: '', gmKey: '', gmModel: '', zoomMin: 0.15, zoomMax: 5, soundOk: '吐息, 溜息, 舌打ち, 咀嚼音' };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
 try {
   const o = JSON.parse(localStorage.getItem(SET_KEY) || '{}');
   if (isFinite(o.still) && o.still >= 0) settings.still = clamp(+o.still, 0, 60);
   if (isFinite(o.loop) && o.loop >= 1) settings.loop = clamp(Math.round(+o.loop), 1, 99);
-  for (const k of ['lmUrl', 'lmModel', 'lmEmb', 'descFmt', 'vocab', 'vocabNg', 'soundOk', 'bgColor', 'bgCustom', 'bgModel']) if (typeof o[k] === 'string') settings[k] = o[k];
+  for (const k of ['lmUrl', 'lmModel', 'lmEmb', 'descFmt', 'vocab', 'vocabNg', 'soundOk', 'bgColor', 'bgCustom', 'bgModel', 'gmKey', 'gmModel']) if (typeof o[k] === 'string') settings[k] = o[k];
   if (typeof o.noThink === 'boolean') settings.noThink = o.noThink;
   if (typeof o.upscaled === 'boolean') settings.upscaled = o.upscaled;
+  if (isFinite(o.zoomMin) && o.zoomMin > 0) settings.zoomMin = clamp(+o.zoomMin, 0.01, 1);
+  if (isFinite(o.zoomMax) && o.zoomMax > 0) settings.zoomMax = clamp(+o.zoomMax, 1, 20);
   if (isFinite(o.bgThr)) settings.bgThr = clamp(Math.round(+o.bgThr), 0, 100);
   if (isFinite(o.tagMax) && o.tagMax >= 1) settings.tagMax = clamp(Math.round(+o.tagMax), 1, 20);
 } catch (_) {}
 $('#setBtn').onclick = () => {
   closePopups();
   $('#setStill').value = settings.still; $('#setLoop').value = settings.loop;
+  $('#setZoomMin').value = settings.zoomMin; $('#setZoomMax').value = settings.zoomMax; $('#setGmKey').value = settings.gmKey; $('#setGmModel').value = settings.gmModel;
   $('#setLmUrl').value = settings.lmUrl; $('#setLmModel').value = settings.lmModel; $('#setLmEmb').value = settings.lmEmb; $('#setVocab').value = settings.vocab; $('#setNoThink').checked = settings.noThink; $('#setUpscaled').checked = settings.upscaled;
   $('#setVocabNg').value = settings.vocabNg; $('#setTagMax').value = settings.tagMax;
   $('#setDescFmt').value = descFields().join('\n'); $('#setSoundOk').value = settings.soundOk; $('#setBgThr').value = settings.bgThr; $('#setBgColor').value = settings.bgColor; $('#setBgCustom').value = settings.bgCustom; $('#setBgModel').value = settings.bgModel; syncBgUI();
@@ -3322,6 +3409,7 @@ document.querySelectorAll('#setTabs button').forEach(b => { b.onclick = () => { 
 }; });
 $('#setCancel').onclick = () => { $('#setDlg').hidden = true; };
 $('#setLmTest').onclick = lmTest;
+$('#setGmTest').onclick = gmTest;
 function syncBgUI() { $('#setBgThrV').textContent = $('#setBgThr').value; $('#setBgCustomRow').hidden = $('#setBgColor').value !== 'custom'; }
 $('#setBgThr').oninput = $('#setBgColor').onchange = syncBgUI;
 $('#setDescFmtReset').onclick = () => { $('#setDescFmt').value = DESC_FMT_DEFAULT; };
@@ -3333,6 +3421,10 @@ $('#setOk').onclick = () => {
   settings.vocabNg = $('#setVocabNg').value.trim(); settings.tagMax = clamp(parseInt($('#setTagMax').value, 10) || 8, 1, 20);
   { const l = descFmtList($('#setDescFmt').value).join('\n'); settings.descFmt = l === DESC_FMT_DEFAULT ? '' : l; }   // 初期値のままなら空にして、今後の初期値の変更に追従する
   settings.upscaled = $('#setUpscaled').checked; settings.soundOk = $('#setSoundOk').value.trim(); settings.bgThr = clamp(parseInt($('#setBgThr').value, 10) || 0, 0, 100); settings.bgColor = $('#setBgColor').value; settings.bgCustom = $('#setBgCustom').value; settings.bgModel = $('#setBgModel').value.trim();
+  { const zl = parseFloat($('#setZoomMin').value), zh = parseFloat($('#setZoomMax').value);
+    settings.zoomMin = isFinite(zl) && zl > 0 ? clamp(zl, 0.01, 1) : settings.zoomMin;
+    settings.zoomMax = isFinite(zh) && zh > 0 ? clamp(zh, 1, 20) : settings.zoomMax; }
+  settings.gmKey = $('#setGmKey').value.trim(); settings.gmModel = $('#setGmModel').value.trim(); gmSchemaOK = true;
   settings.noThink = $('#setNoThink').checked; lmPrefillOK = lmSchemaOK = true;   // 設定を変えたら対応状況の判定をやり直す
   try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (_) {}
   $('#setDlg').hidden = true; toast('設定を保存しました');
