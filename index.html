@@ -21,6 +21,8 @@
     display:flex;flex-direction:column;gap:6px;z-index:10}
   .row{display:flex;gap:6px}
   .row[hidden]{display:none}
+  #connRow{flex-wrap:wrap;max-width:calc(100vw - 16px - env(safe-area-inset-left) - env(safe-area-inset-right))}
+  #connRow button{padding:0 12px}
   button{font:inherit;color:var(--fg);background:var(--panel);border:1px solid #444a5c;border-radius:10px;
     min-height:44px;padding:0 14px;cursor:pointer;opacity:.96}
   button:active{background:var(--panel2)}
@@ -129,6 +131,7 @@
     <button id="cRev">← 逆順</button>
     <button id="cBoth">↔ 両方</button>
     <button id="cDel">接続解除</button>
+    <button id="cCopy" title="選択した矢印の、前後のファイル名と動画プロンプトを選択順にコピー" aria-label="前後のファイル名と動画プロンプトをコピー">📋 プロンプト</button>
   </div>
 </div>
 
@@ -223,8 +226,8 @@
       <label>Gemini API キー
         <input id="setGmKey" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="AIza…">
       </label>
-      <label>モデルID（空なら、使える最新の Flash を自動で選びます）
-        <input id="setGmModel" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="例：gemini-3.5-flash（models/ は不要）">
+      <label>モデルID（空なら、既定の gemini-3.1-flash-lite を使います）
+        <input id="setGmModel" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="gemini-3.1-flash-lite（models/ は不要）">
       </label>
       <div class="btns"><button id="setGmTest" type="button">🔌 接続テスト</button></div>
       <div class="hint">長押しメニューの「✨ Geminiでタグ付け」「✨ Geminiで説明文を追加」と、🛠 編集メニューの「✨ 画像にタグ付け（Gemini）」で使います。タグの語彙・説明文の項目などの設定は、LM Studio と共通です。画像（キャラクター部分を切り出して縮小したもの）は Google の Gemini API に送信され、API キーはこの端末のブラウザにだけ保存されます。</div>
@@ -288,7 +291,11 @@ const STORE = 'keyframe-map.v1';
 let W = 0, H = 0, dpr = 1;
 const view = { x: 0, y: 0, s: 1 };          // screen = world * s + (x, y)
 let nodes = [], arrows = [];                 // 矢印の from/to が null ＝ ノードにつながっていない「未リンクの矢印」（位置は ux, uy）
-const sel = { nodes: [], arrow: null, garrows: [], grp: false };   // nodes＝選択順／garrows＝範囲選択した未リンクの矢印／grp＝範囲選択・全選択（外枠と四隅のハンドルを表示）
+const sel = {                                // nodes＝選択順／arrs＝選択した矢印（選択順。複数選択は接続編集モードだけ）／garrows＝範囲選択した未リンクの矢印／grp＝範囲選択・全選択（外枠と四隅のハンドルを表示）
+  nodes: [], arrs: [], garrows: [], grp: false,
+  get arrow() { return this.arrs.length ? this.arrs[this.arrs.length - 1] : null; },       // 最後に選んだ矢印
+  set arrow(v) { this.arrs = v ? [v] : []; }                                                // 代入すると、その1本だけの選択になる（null で解除）
+};
 let band = null;                             // レイアウトモードの範囲選択（画面座標）{x0,y0,x1,y1}
 let nowPlaying = null;                       // 連続再生中の項目 {k:'node'|'arrow', id}（黄色で強調）
 const YEL = '#ffe600';
@@ -759,9 +766,18 @@ function drawGroupBox() {
   [[b.x0, b.y0], [b.x1, b.y0], [b.x0, b.y1], [b.x1, b.y1]].forEach(([x, y]) => { ctx.fillRect(x - hs, y - hs, hs * 2, hs * 2); ctx.strokeRect(x - hs, y - hs, hs * 2, hs * 2); });
   ctx.restore();
 }
+function arrowBadge(a, x, y) {                // 接続編集モードで矢印を複数選択しているとき、選択順の番号を表示する
+  const i = mode === 'connect' && sel.arrs.length > 1 ? sel.arrs.indexOf(a.id) : -1;
+  if (i < 0) return;
+  ctx.save();
+  ctx.fillStyle = '#ffb84d'; ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#1b1d24'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(String(i + 1), x, y + 1);
+  ctx.restore();
+}
 function drawArrow(a) {
   const g = geom(a); if (!g || g.free) return;
-  const s = sel.arrow === a.id || sel.garrows.includes(a.id);
+  const s = sel.arrs.includes(a.id) || sel.garrows.includes(a.id);
   const np = isNow('arrow', a.id);
   const col = np ? YEL : s ? '#ffb84d' : '#9fb4d6';
   const ang = Math.atan2(g.p2.y - g.p1.y, g.p2.x - g.p1.x), hl = 16;
@@ -779,6 +795,7 @@ function drawArrow(a) {
   ctx.lineTo(g.p2.x - hl * Math.cos(ang + .4), g.p2.y - hl * Math.sin(ang + .4));
   ctx.closePath(); ctx.fill();
   ctx.restore();
+  if (!a.video) arrowBadge(a, g.mid.x, g.mid.y);   // 動画のある矢印は、プレビューの角に表示する（drawVideo）
 }
 
 /* シークバー：左端＝開始ノードの静止画 / 中間＝動画 / 右端＝終了ノードの静止画 */
@@ -872,7 +889,7 @@ function drawVideo(a) {
   if (!a.video) return;
   const g = geom(a); if (!g) return;
   const x = g.vc.x - a.vw / 2, y = g.vc.y - a.vh / 2, w = a.vw, h = a.vh;
-  const s = sel.arrow === a.id || sel.garrows.includes(a.id);
+  const s = sel.arrs.includes(a.id) || sel.garrows.includes(a.id);
   const ve = getVid(a.video);
   const rt = a.rt || 'idle';
   ctx.save();
@@ -924,6 +941,7 @@ function drawVideo(a) {
     ctx.fillText('未接続', x, y - 4);
   }
   ctx.restore();
+  arrowBadge(a, x - 4, y - 4);
 }
 
 function drawNode(n) {
@@ -978,59 +996,86 @@ function drawNode(n) {
 }
 
 /* ---------- 選択 ---------- */
-/* 接続編集モードでは「2ノード」「2ノード＋未リンクの矢印」「リンク済みの矢印1本」を選べる */
+/* 接続編集モードでは、ノード・矢印をタップするたびに選択へ追加／解除する（任意の数・選択順）。
+   ノードは何個でも選べる。矢印は何本でも選べるが、リンク済みの矢印とノードは同時に選べない（未リンクの矢印はノードと一緒に選べる） */
 function selectNode(id) {
   if (mode === 'connect') {
     const i = sel.nodes.indexOf(id);
-    if (i >= 0) sel.nodes.splice(i, 1);
-    else { sel.nodes.push(id); if (sel.nodes.length > 2) sel.nodes.shift(); }
-    const a = sel.arrow && arrowById(sel.arrow);
-    if (a && !isFree(a)) sel.arrow = null;   // リンク済みの矢印とノードは同時に選べない
+    if (i >= 0) sel.nodes.splice(i, 1); else sel.nodes.push(id);
+    sel.arrs = sel.arrs.filter(x => { const a = arrowById(x); return a && isFree(a); });   // リンク済みの矢印は選択から外す
   } else { sel.nodes = [id]; sel.arrow = null; }
   sel.garrows = []; sel.grp = false;
 }
 function selectArrow(id) {
   const a = arrowById(id);
   sel.garrows = []; sel.grp = false;
-  if (mode === 'connect' && a && isFree(a)) { sel.arrow = id; return; }   // 未リンクの矢印はノード選択を保つ
+  if (mode === 'connect' && a) {
+    const i = sel.arrs.indexOf(id);
+    if (i >= 0) sel.arrs.splice(i, 1); else sel.arrs.push(id);
+    if (!isFree(a)) sel.nodes = [];          // リンク済みの矢印とノードは同時に選べない
+    return;
+  }
+  sel.nodes = []; sel.arrow = id;
+}
+function selectArrowOnly(id) {               // 長押しで未選択の矢印を対象にするとき：その1本だけを選ぶ（接続編集モードの未リンクの矢印は、ノードの選択を保つ）
+  const a = arrowById(id);
+  sel.garrows = []; sel.grp = false;
+  if (mode === 'connect' && a && isFree(a)) { sel.arrow = id; return; }
   sel.nodes = []; sel.arrow = id;
 }
 function clearSel() { sel.nodes = []; sel.arrow = null; sel.garrows = []; sel.grp = false; }
 
 /* ---------- 接続 ---------- */
-function pairArrows() {
-  if (sel.nodes.length !== 2) return { ab: null, ba: null };
-  const [a, b] = sel.nodes;
+const DIR_LABEL = { fwd: '選択順', rev: '逆順', both: '両方向' };
+const selNodeIds = () => sel.nodes.filter(id => nodeById(id));
+function chainPairs() {                      // 選択順に隣り合うノードの組：[1,2]、[2,3]、…
+  const ids = selNodeIds(), p = [];
+  for (let i = 0; i + 1 < ids.length; i++) p.push([ids[i], ids[i + 1]]);
+  return p;
+}
+function pairArrows(a, b) {                  // 2ノード間の矢印：ab＝a→b／ba＝b→a（引数なしは、選択中の2ノード）
+  if (a === undefined) { if (sel.nodes.length !== 2) return { ab: null, ba: null }; [a, b] = sel.nodes; }
   return {
     ab: arrows.find(x => x.from === a && x.to === b) || null,
     ba: arrows.find(x => x.from === b && x.to === a) || null
   };
 }
-/* kind: nodes＝2ノード / free＝2ノード＋未リンクの矢印 / linked＝リンク済みの矢印 / none */
+/* kind: nodes＝ノード2つ以上（選択順に隣り合う組ごとにつなぐ）／free＝2ノード＋未リンクの矢印1本／nodefree＝1ノード＋未リンクの矢印1本／
+         linked＝リンク済みの矢印（1本以上）／none */
 function connState() {
-  const a = sel.arrow ? arrowById(sel.arrow) : null;
-  if (a && !isFree(a)) return { kind: 'linked', a };
-  if (sel.nodes.length === 2) return { kind: a ? 'free' : 'nodes', a };
-  if (sel.nodes.length === 1 && a && isFree(a)) return { kind: 'nodefree', a, node: nodeById(sel.nodes[0]) };   // 1ノード＋未リンクの矢印
-  return { kind: 'none', a };
+  const as = sel.arrs.map(arrowById).filter(Boolean);
+  const linked = as.filter(a => !isFree(a)), free = as.filter(isFree);
+  if (linked.length) return { kind: 'linked', list: linked };
+  const ids = selNodeIds(), one = free.length === 1 ? free[0] : null;
+  if (ids.length === 2 && one) return { kind: 'free', a: one };
+  if (ids.length >= 2) return { kind: 'nodes' };
+  if (ids.length === 1 && one) return { kind: 'nodefree', a: one, node: nodeById(ids[0]) };   // 1ノード＋未リンクの矢印
+  return { kind: 'none' };
 }
 const reverseOf = x => arrows.find(y => y !== x && y.from === x.to && y.to === x.from) || null;
 function updateConnUI() {
   const st = connState();
   const bt = { fwd: $('#cFwd'), rev: $('#cRev'), both: $('#cBoth'), del: $('#cDel') };
   Object.values(bt).forEach(b => { b.disabled = true; b.classList.remove('on'); });
+  $('#cCopy').disabled = !sel.arrs.some(id => arrowById(id));   // 選択した矢印があれば押せる（プロンプトがあるかは押したときに確認）
   if (st.kind === 'linked') {
-    const ba = reverseOf(st.a);              // 逆向きの矢印がすでにあれば「逆順」「両方」は不要
-    bt.rev.disabled = !!ba; bt.both.disabled = !!ba; bt.del.disabled = false;
-    bt.both.classList.toggle('on', !!ba);
+    const todo = st.list.filter(x => !reverseOf(x));   // 逆向きの矢印がまだない矢印だけが「逆順」「両方」の対象
+    bt.rev.disabled = bt.both.disabled = !todo.length; bt.del.disabled = false;
+    bt.both.classList.toggle('on', !todo.length);
   } else if (st.kind === 'nodefree') {         // 1ノード＋未リンクの矢印：もう一方の端は動画の先頭／最終フレームから自動生成する
     const ok = !!(st.a.video && media.has(st.a.video)) && !!st.node;
     bt.fwd.disabled = bt.rev.disabled = bt.both.disabled = !ok;
     bt.del.disabled = !(st.node && arrows.some(x => x.from === st.node.id || x.to === st.node.id));
-  } else if (st.kind === 'nodes' || st.kind === 'free') {
+  } else if (st.kind === 'nodes') {            // 2つ以上：選択順に隣り合う組ごとに、まとめてつなぐ
+    const ps = chainPairs().map(([a, b]) => pairArrows(a, b));
+    bt.fwd.disabled = bt.rev.disabled = bt.both.disabled = false;
+    bt.del.disabled = !ps.some(p => p.ab || p.ba);
+    bt.fwd.classList.toggle('on', ps.every(p => p.ab && !p.ba));
+    bt.rev.classList.toggle('on', ps.every(p => p.ba && !p.ab));
+    bt.both.classList.toggle('on', ps.every(p => p.ab && p.ba));
+  } else if (st.kind === 'free') {
     const { ab, ba } = pairArrows();
-    if (st.kind === 'nodes') { bt.fwd.disabled = bt.rev.disabled = bt.both.disabled = false; }
-    else { bt.fwd.disabled = !!ab; bt.rev.disabled = !!ba; bt.both.disabled = !!(ab && ba); }
+    bt.fwd.disabled = !!ab; bt.rev.disabled = !!ba; bt.both.disabled = !!(ab && ba);
     bt.del.disabled = !(ab || ba);
     bt.fwd.classList.toggle('on', !!ab && !ba);
     bt.rev.classList.toggle('on', !!ba && !ab);
@@ -1038,27 +1083,37 @@ function updateConnUI() {
   }
 }
 const newArrow = (f, t) => ({ id: uid(), from: f, to: t, ux: null, uy: null, video: null, videoHash: null, vw: null, vh: null });
-function connect(dir) {
-  const st = connState();
-  if (st.kind === 'linked') return connectLinked(dir, st.a);
-  if (st.kind === 'free') return attachFree(dir, st.a);
-  if (st.kind === 'nodefree') return attachFreeToNode(dir, st.a, st.node);
-  if (sel.nodes.length !== 2) return;
-  const [a, b] = sel.nodes;
-  const { ab, ba } = pairArrows();
-  const mk = (f, t) => arrows.push(newArrow(f, t));
-  const rm = x => { arrows = arrows.filter(y => y !== x); if (sel.arrow === x.id) sel.arrow = null; };
+/* 2ノード a, b（選択順）の間を、選択順（fwd＝a→b）・逆順（rev＝b→a）・両方向にそろえる。戻り値：追加・向き変更・削除した本数 */
+function connectPair(a, b, dir) {
+  const { ab, ba } = pairArrows(a, b), r = { made: 0, flipped: 0, removed: 0 };
+  const mk = (f, t) => { arrows.push(newArrow(f, t)); r.made++; };
+  const rm = x => { arrows = arrows.filter(y => y !== x); sel.arrs = sel.arrs.filter(i => i !== x.id); r.removed++; };
   if (dir === 'fwd') {
     if (ab) { if (ba) rm(ba); }
-    else if (ba) { ba.from = a; ba.to = b; } else mk(a, b);
+    else if (ba) { ba.from = a; ba.to = b; r.flipped++; } else mk(a, b);
   } else if (dir === 'rev') {
     if (ba) { if (ab) rm(ab); }
-    else if (ab) { ab.from = b; ab.to = a; } else mk(b, a);
+    else if (ab) { ab.from = b; ab.to = a; r.flipped++; } else mk(b, a);
   } else {
     if (!ab) mk(a, b);
     if (!ba) mk(b, a);
   }
+  return r;
+}
+function connect(dir) {
+  const st = connState();
+  if (st.kind === 'linked') return connectLinked(dir, st.list);
+  if (st.kind === 'free') return attachFree(dir, st.a);
+  if (st.kind === 'nodefree') return attachFreeToNode(dir, st.a, st.node);
+  if (st.kind !== 'nodes') return;
+  // 選択したノードを、選択順に隣り合う組ごとにつなぐ（逆順は、それぞれ逆向き＝全体を逆順にたどる向き）
+  const ps = chainPairs(), t = { made: 0, flipped: 0, removed: 0 };
+  ps.forEach(([a, b]) => { const r = connectPair(a, b, dir); t.made += r.made; t.flipped += r.flipped; t.removed += r.removed; });
   save(); updateConnUI(); draw();
+  if (ps.length > 1) {
+    const d = [t.made && `追加 ${t.made} 本`, t.flipped && `向きを変更 ${t.flipped} 本`, t.removed && `削除 ${t.removed} 本`].filter(Boolean);
+    toast(`${ps.length + 1} 個のノードを${DIR_LABEL[dir]}に接続しました` + (d.length ? `（${d.join('、')}）` : '（すでに接続済みです）'));
+  }
 }
 /* 未リンクの矢印を、選択した2ノードの間につなぐ */
 /* 1ノード＋未リンクの矢印：選択ノードを矢印の始点（選択順）／終点（逆順）にし、もう一方の端は動画の最終／先頭フレームから静止画ノードを自動生成する。
@@ -1102,47 +1157,50 @@ function attachFree(dir, u) {
   save(); updateConnUI(); draw();
   toast('矢印をノードにつなぎました');
 }
-/* リンク済みの矢印の向きを逆にする／逆向きの矢印を追加する */
-function connectLinked(dir, x) {
-  if (reverseOf(x)) return;
-  if (dir === 'rev') { const f = x.from; x.from = x.to; x.to = f; x.rt = 'idle'; }
-  else if (dir === 'both') arrows.push(newArrow(x.to, x.from));
-  else return;
+/* リンク済みの矢印（1本以上）の向きを逆にする／逆向きの矢印を追加する（逆向きの矢印がすでにあるものは対象外） */
+function connectLinked(dir, list) {
+  let n = 0;
+  for (const x of list) {
+    if (reverseOf(x)) continue;
+    if (dir === 'rev') { const f = x.from; x.from = x.to; x.to = f; x.rt = 'idle'; n++; }
+    else if (dir === 'both') { arrows.push(newArrow(x.to, x.from)); n++; }
+  }
+  if (!n) return;
   save(); updateConnUI(); draw();
+  if (list.length > 1) toast(dir === 'rev' ? `${n} 本の矢印の向きを逆にしました` : `${n} 本の矢印に、逆向きの矢印（動画なし）を追加しました`);
 }
 function disconnect() {
   const st = connState();
-  if (st.kind === 'linked') {                // 接続を解除して未リンクの矢印に変換
-    const x = st.a, g = geom(x);
-    if (!x.video) {                          // 動画のない矢印は置き場がないので削除
-      arrows = arrows.filter(y => y !== x); clearSel();
-      toast('動画のない矢印は削除しました');
-    } else {
-      x.ux = g.vc.x; x.uy = g.vc.y; x.from = null; x.to = null;
-      toast('未リンクの矢印にしました');
-    }
-    save(); updateConnUI(); draw(); return;
+  if (st.kind === 'linked') {                // 接続を解除して未リンクの矢印に変換（動画のない矢印は置き場がないので削除）
+    const r = detachArrows(st.list);
+    sel.arrs = sel.arrs.filter(id => arrowById(id));
+    save(); updateConnUI(); draw(); toast(detachMsg(r)); return;
   }
   if (st.kind === 'nodefree') {              // 選択ノードにつながる矢印をすべて外す（動画があれば未リンクの矢印に、なければ削除）
     const r = detachArrows(arrows.filter(x => x.from === st.node.id || x.to === st.node.id));
     if (sel.arrow && !arrowById(sel.arrow)) sel.arrow = null;
     save(); updateConnUI(); draw(); toast(detachMsg(r)); return;
   }
-  const { ab, ba } = pairArrows();
-  if (!ab && !ba) return;
-  arrows = arrows.filter(x => x !== ab && x !== ba);
-  if (sel.arrow && !arrowById(sel.arrow)) sel.arrow = null;
+  if (st.kind !== 'nodes' && st.kind !== 'free') return;
+  const rm = [];                             // 選択順に隣り合う組どうしをつなぐ矢印（どちら向きも）を削除する
+  chainPairs().forEach(([a, b]) => { const { ab, ba } = pairArrows(a, b); if (ab) rm.push(ab); if (ba) rm.push(ba); });
+  if (!rm.length) return;
+  arrows = arrows.filter(x => !rm.includes(x));
+  sel.arrs = sel.arrs.filter(id => arrowById(id));
   save(); updateConnUI(); draw();
+  if (rm.length > 1) toast(`${rm.length} 本の矢印を削除しました`);
 }
 $('#cFwd').onclick = () => connect('fwd');
 $('#cRev').onclick = () => connect('rev');
 $('#cBoth').onclick = () => connect('both');
 $('#cDel').onclick = disconnect;
+$('#cCopy').onclick = () => copyArrowPrompts(sel.arrs.map(arrowById));
 
 /* ---------- モード ---------- */
 function setMode(m) {
   mode = m; sel.grp = false;
   if (m !== 'connect') {
+    sel.arrs = sel.arrs.slice(-1);           // 矢印の複数選択は接続編集モードだけ（最後に選んだ1本を残す）
     if (sel.arrow) sel.nodes = [];
     else if (sel.nodes.length > 1) sel.nodes = [sel.nodes[sel.nodes.length - 1]];
   }
@@ -1249,7 +1307,7 @@ function tagDelMenu(x, y, targets) {         // 選択範囲に設定されて�
 let clip = null, lastPaste = null, lastPt = null;   // clip＝アプリ内クリップボード
 function selParts() {                        // 選択中のノード・未リンクの矢印・（単独で選んだ）リンク済みの矢印
   const ns = sel.nodes.map(nodeById).filter(Boolean);
-  const ids = new Set(sel.garrows); if (sel.arrow) ids.add(sel.arrow);
+  const ids = new Set(sel.garrows); sel.arrs.forEach(id => ids.add(id));
   const fa = [...ids].map(arrowById).filter(a => a && isFree(a));
   const la = sel.arrow && arrowById(sel.arrow);
   const single = !ns.length && la && !isFree(la) ? la : null;
@@ -1376,16 +1434,18 @@ function deleteSelection() {
     updateConnUI(); save(); draw(); toast(msgs.join('　'));
     return;
   }
-  const a = sel.arrow && arrowById(sel.arrow);
-  if (!a) { if (gmsg) { updateConnUI(); save(); draw(); toast(gmsg); } return; }
-  if (isFree(a)) {
-    const v = a.video && vids.get(a.video); if (v) v.el.pause();
-    arrows = arrows.filter(x => x !== a); clearSel(); toast('矢印を削除しました');
-  } else {
-    const r = detachArrows([a]);
-    if (r.dropped) clearSel();
-    toast(detachMsg(r));
+  const as = sel.arrs.map(arrowById).filter(Boolean);   // 選択中の矢印（接続編集モードでは複数）
+  if (!as.length) { if (gmsg) { updateConnUI(); save(); draw(); toast(gmsg); } return; }
+  const fr = as.filter(isFree), lk = as.filter(x => !isFree(x)), msgs = [];
+  if (fr.length) {
+    fr.forEach(a => { const v = a.video && vids.get(a.video); if (v) v.el.pause(); });
+    arrows = arrows.filter(x => !fr.includes(x));
+    msgs.push(fr.length === 1 && !lk.length ? '矢印を削除しました' : `未リンクの矢印を ${fr.length} 本削除しました`);
   }
+  let dropped = false;
+  if (lk.length) { const r = detachArrows(lk); dropped = !!r.dropped; msgs.push(detachMsg(r)); }
+  if (fr.length || dropped) clearSel(); else sel.arrs = sel.arrs.filter(id => arrowById(id));
+  toast(msgs.join('　'));
   updateConnUI(); save(); draw();
 }
 function onLong(g) {
@@ -1407,7 +1467,7 @@ function onLong(g) {
   }
   if (hit) {
     if (hit.type === 'node' && !sel.nodes.includes(hit.id)) { sel.nodes = [hit.id]; sel.arrow = null; sel.garrows = []; sel.grp = false; }
-    if (hit.type === 'arrow' && sel.arrow !== hit.id) selectArrow(hit.id);
+    if (hit.type === 'arrow' && !sel.arrs.includes(hit.id)) selectArrowOnly(hit.id);
   }
   if (!hit) {                                // 何もないところの長押し：貼り付け
     if (navigator.vibrate) navigator.vibrate(15);
@@ -1441,7 +1501,9 @@ function onLong(g) {
       { label: '🗑 ノードを削除', fn: () => deleteNode(o) }
     ]);
   } else {
+    const multi = mode === 'connect' && sel.arrs.length > 1 && sel.arrs.includes(o.id) ? sel.arrs.map(arrowById).filter(Boolean) : null;   // 接続編集モードで複数選択中
     showPopup(g.sx, g.sy, [
+      ...(multi ? [{ label: `📋 選択した ${multi.length} 本の前後のファイル名と動画プロンプトをコピー`, fn: () => copyArrowPrompts(multi) }] : []),
       { label: '🎞 ファイル名選択（動画）', fn: () => { pickCtx = { type: 'arrowVideo', id: o.id }; $('#vidPick').click(); } },
       { label: 'ファイル解除', disabled: !o.video, fn: () => {
           const v = vids.get(o.video); if (v) v.el.pause();
@@ -1527,10 +1589,10 @@ function togglePlay(a) {
   draw();
 }
 function ctrlToggle(hit) {                   // 複数選択（レイアウトモードへ切り替えて、まとめて移動・削除できるようにする）
-  const sn = [...sel.nodes], sa = sel.arrow, sg = [...sel.garrows];
+  const sn = [...sel.nodes], sa = [...sel.arrs], sg = [...sel.garrows];
   if (mode !== 'layout') setMode('layout');
   sel.nodes = sn; sel.arrow = null; sel.garrows = sg;
-  if (sa && !sel.garrows.includes(sa)) sel.garrows.push(sa);
+  sa.forEach(id => { if (!sel.garrows.includes(id)) sel.garrows.push(id); });
   const list = hit.type === 'node' ? sel.nodes : sel.garrows, i = list.indexOf(hit.id);
   if (i >= 0) list.splice(i, 1); else list.push(hit.id);
   sel.grp = sel.nodes.length + sel.garrows.length > 0;
@@ -1564,7 +1626,7 @@ function selItems() {                        // 選択中のノード・未リ�
   const items = [];
   sel.nodes.forEach(id => { const n = nodeById(id); if (n) items.push({ o: n, kx: 'x', ky: 'y', ox: n.x, oy: n.y }); });
   const ids = new Set(sel.garrows);
-  if (sel.arrow) ids.add(sel.arrow);
+  sel.arrs.forEach(id => ids.add(id));
   ids.forEach(id => { const x = arrowById(id); if (x && isFree(x)) items.push({ o: x, kx: 'ux', ky: 'uy', ox: x.ux, oy: x.uy }); });
   return items;
 }
@@ -2464,25 +2526,9 @@ async function gmListModels(signal, key) {   // generateContent に対応する�
   }
   return out;
 }
-function gmPick(names) {                     // 画像を扱える最新の Flash（なければ Flash-Lite、Pro の順）を選ぶ。安定版を優先
-  let best = null, bs = -1;
-  for (const n of names) {
-    const m = n.match(/^gemini-(\d+(?:\.\d+)?)-(flash-lite|flash|pro)(.*)$/);
-    if (!m || /image|tts|live|audio|embed|robot|computer|exp|latest/.test(m[3])) continue;
-    const sc = (m[2] === 'flash' ? 2 : m[2] === 'flash-lite' ? 1 : 0) * 1000 + parseFloat(m[1]) * 10 + (m[3] === '' ? 1 : 0);
-    if (sc > bs) { bs = sc; best = n; }
-  }
-  return best;
-}
-let gmAuto = '', gmAutoKey = '';
-async function gmResolveModel(signal) {      // モデルIDが空なら、APIキーで使えるモデルから自動で選ぶ（古いモデルが廃止されても動くように）
-  const m = (settings.gmModel || '').trim().replace(/^models\//, '');
-  if (m) return m;
-  const key = (settings.gmKey || '').trim();
-  if (gmAuto && gmAutoKey === key) return gmAuto;
-  const p = gmPick(await gmListModels(signal));
-  if (!p) throw new Error('利用できる Gemini モデルが見つかりません（設定の Gemini タブでモデルIDを入力してください）');
-  gmAuto = p; gmAutoKey = key; return p;
+const GM_DEFAULT = 'gemini-3.1-flash-lite';   // 既定のモデル（動作確認済み）。設定のモデルIDが空のときに使う
+async function gmResolveModel() {            // 設定のモデルIDがあればそれ、空なら既定のモデル
+  return (settings.gmModel || '').trim().replace(/^models\//, '') || GM_DEFAULT;
 }
 const dataPart = url => ({ inline_data: { mime_type: 'image/jpeg', data: url.slice(url.indexOf(',') + 1) } });
 async function gmCall(model, system, parts, opt, signal) {
@@ -2509,8 +2555,7 @@ async function gmCall(model, system, parts, opt, signal) {
     const msg = (j && j.error && j.error.message) || ('HTTP ' + r.status);
     let hint = '';
     if (r.status === 404) {                  // モデルが見つからない・廃止された：利用できるモデルを案内する
-      gmAuto = '';
-      try { const nm = (await gmListModels(signal)).filter(n => /^gemini-\d/.test(n)); if (nm.length) hint = '　利用できるモデル：' + nm.slice(0, 12).join('、') + '（設定の Gemini タブでモデルIDを変更するか、空にすると自動で選びます）'; } catch (_) {}
+      try { const nm = (await gmListModels(signal)).filter(n => /^gemini-\d/.test(n)); if (nm.length) hint = '　利用できるモデル：' + nm.slice(0, 12).join('、') + '（設定の Gemini タブでモデルIDを変更してください。空にすると既定の ' + GM_DEFAULT + ' を使います）'; } catch (_) {}
     }
     const er = new Error(`Geminiがエラーを返しました（${r.status}）：${String(msg).slice(0, 120)}${hint}`);
     er.status = r.status; if (r.status === 401 || r.status === 403 || /API key/i.test(msg)) er.conn = true;   // キーの誤りなどは、残りも試さない
@@ -2526,9 +2571,9 @@ async function gmTest() {                    // 設定ダイアログの「接�
   if (!key) return toast('API キーを入力してください');
   toast('接続を確認中…');
   try {
-    const names = await gmListModels(null, key), pick = gmPick(names);
-    if (want && !names.includes(want)) toast(`モデル「${want}」は見つかりません。利用できるモデル：${names.filter(n => /^gemini-\d/.test(n)).slice(0, 10).join('、')}`);
-    else toast(`接続できました。使用するモデル：${want || pick || '（見つかりません）'}（利用可能 ${names.length} 件）`);
+    const names = await gmListModels(null, key), use = want || GM_DEFAULT;
+    if (!names.includes(use)) toast(`モデル「${use}」は見つかりません。利用できるモデル：${names.filter(n => /^gemini-\d/.test(n)).slice(0, 10).join('、')}`);
+    else toast(`接続できました。使用するモデル：${use}${want ? '' : '（既定）'}（利用可能 ${names.length} 件）`);
   } catch (e) { toast('接続できません：' + String((e && e.message) || e).slice(0, 120)); }
 }
 const lmList = s => cleanTags((s || '').split(/[,，、\n]/));
@@ -2614,6 +2659,15 @@ function arrowPromptText(a) {                // 1行目：先頭フレームの�
   if (!a || isFree(a)) return null;
   const f = nodeById(a.from), t = nodeById(a.to), fd = nodeDesc(f), td = nodeDesc(t), m = fd && td && descIdx.get(mKey(fd, td));
   return m ? [fileOf(f), fileOf(t), m.replace(/\s*\n\s*/g, ' ').trim()].join('\n') : null;
+}
+function copyArrowPrompts(list) {            // 選択順に、矢印1本につき3行（先頭・最終フレームのファイル名と動画プロンプト）を、空行で区切ってコピーする
+  descLoad();
+  list = (list || []).filter(Boolean);
+  if (!list.length) return toast('コピーする矢印が選択されていません');
+  const items = list.map(arrowPromptText).filter(Boolean), skip = list.length - items.length;
+  if (!items.length) return toast(list.length === 1 && isFree(list[0]) ? 'ノードにつながっていない矢印は、前後のファイル名がないのでコピーできません'
+    : '動画プロンプト（矢印の説明文）がありません。先に「説明文を追加」で作ってください');
+  copyText(items.join('\n\n'), `前後のファイル名と動画プロンプト（${items.length} 本分${skip ? `、説明文のない ${skip} 本は除外` : ''}）`);
 }
 let descClosedFor = '';                      // ×で閉じたときの、そのときの表示対象（選択を変えると再び表示する）
 function drawDescs() {                       // render の最後に呼ぶ：選択中のノード・矢印のファイル名と説明文を、キャンバスに合わせて配置する
@@ -3464,7 +3518,7 @@ $('#setOk').onclick = () => {
   { const zl = parseFloat($('#setZoomMin').value), zh = parseFloat($('#setZoomMax').value);
     settings.zoomMin = isFinite(zl) && zl > 0 ? clamp(zl, 0.01, 1) : settings.zoomMin;
     settings.zoomMax = isFinite(zh) && zh > 0 ? clamp(zh, 1, 20) : settings.zoomMax; }
-  settings.gmKey = $('#setGmKey').value.trim(); settings.gmModel = $('#setGmModel').value.trim().replace(/^models\//, ''); gmSchemaOK = true; gmAuto = '';
+  settings.gmKey = $('#setGmKey').value.trim(); settings.gmModel = $('#setGmModel').value.trim().replace(/^models\//, ''); gmSchemaOK = true;
   settings.noThink = $('#setNoThink').checked; lmPrefillOK = lmSchemaOK = true;   // 設定を変えたら対応状況の判定をやり直す
   try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (_) {}
   $('#setDlg').hidden = true; toast('設定を保存しました');
