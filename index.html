@@ -223,8 +223,8 @@
       <label>Gemini API キー
         <input id="setGmKey" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="AIza…">
       </label>
-      <label>モデルID（空なら gemini-2.5-flash）
-        <input id="setGmModel" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="gemini-2.5-flash">
+      <label>モデルID（空なら、使える最新の Flash を自動で選びます）
+        <input id="setGmModel" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="例：gemini-3.5-flash（models/ は不要）">
       </label>
       <div class="btns"><button id="setGmTest" type="button">🔌 接続テスト</button></div>
       <div class="hint">長押しメニューの「✨ Geminiでタグ付け」「✨ Geminiで説明文を追加」と、🛠 編集メニューの「✨ 画像にタグ付け（Gemini）」で使います。タグの語彙・説明文の項目などの設定は、LM Studio と共通です。画像（キャラクター部分を切り出して縮小したもの）は Google の Gemini API に送信され、API キーはこの端末のブラウザにだけ保存されます。</div>
@@ -2448,11 +2448,47 @@ async function lmTest() {                    // 設定ダイアログの「接�
 /* LM Studio と同じ関数を使い回すため、base に GM_SRC を渡したときは Gemini へ送る */
 const GM_SRC = 'gemini:', GM_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 let gmSchemaOK = true;
-const gmModel = () => (settings.gmModel || '').trim() || 'gemini-2.5-flash';
+const gmNoKey = () => new Error('設定の Gemini タブで API キーを入力してください');
+async function gmListModels(signal, key) {   // generateContent に対応するモデルの名前（models/ なし）の一覧
+  key = key || (settings.gmKey || '').trim();
+  if (!key) throw gmNoKey();
+  const out = []; let tok = '';
+  for (let i = 0; i < 5; i++) {
+    let r;
+    try { r = await fetch(GM_BASE + '/models?pageSize=100' + (tok ? '&pageToken=' + encodeURIComponent(tok) : ''), { headers: { 'x-goog-api-key': key }, signal }); }
+    catch (e) { if (signal && signal.aborted) throw e; const er = new Error('Geminiに接続できません（ネットワークを確認してください）'); er.conn = true; throw er; }
+    const j = await r.json().catch(() => null);
+    if (!r.ok) { const er = new Error((j && j.error && j.error.message) || ('HTTP ' + r.status)); if (r.status === 401 || r.status === 403 || r.status === 400) er.conn = true; throw er; }
+    (j.models || []).forEach(m => { if (!m.supportedGenerationMethods || m.supportedGenerationMethods.includes('generateContent')) out.push(String(m.name).replace(/^models\//, '')); });
+    tok = j.nextPageToken; if (!tok) break;
+  }
+  return out;
+}
+function gmPick(names) {                     // 画像を扱える最新の Flash（なければ Flash-Lite、Pro の順）を選ぶ。安定版を優先
+  let best = null, bs = -1;
+  for (const n of names) {
+    const m = n.match(/^gemini-(\d+(?:\.\d+)?)-(flash-lite|flash|pro)(.*)$/);
+    if (!m || /image|tts|live|audio|embed|robot|computer|exp|latest/.test(m[3])) continue;
+    const sc = (m[2] === 'flash' ? 2 : m[2] === 'flash-lite' ? 1 : 0) * 1000 + parseFloat(m[1]) * 10 + (m[3] === '' ? 1 : 0);
+    if (sc > bs) { bs = sc; best = n; }
+  }
+  return best;
+}
+let gmAuto = '', gmAutoKey = '';
+async function gmResolveModel(signal) {      // モデルIDが空なら、APIキーで使えるモデルから自動で選ぶ（古いモデルが廃止されても動くように）
+  const m = (settings.gmModel || '').trim().replace(/^models\//, '');
+  if (m) return m;
+  const key = (settings.gmKey || '').trim();
+  if (gmAuto && gmAutoKey === key) return gmAuto;
+  const p = gmPick(await gmListModels(signal));
+  if (!p) throw new Error('利用できる Gemini モデルが見つかりません（設定の Gemini タブでモデルIDを入力してください）');
+  gmAuto = p; gmAutoKey = key; return p;
+}
 const dataPart = url => ({ inline_data: { mime_type: 'image/jpeg', data: url.slice(url.indexOf(',') + 1) } });
 async function gmCall(model, system, parts, opt, signal) {
   const key = (settings.gmKey || '').trim();
-  if (!key) throw new Error('設定の Gemini タブで API キーを入力してください');
+  if (!key) throw gmNoKey();
+  model = String(model).replace(/^models\//, '');
   const gc = { temperature: opt.temp == null ? 0.2 : opt.temp, maxOutputTokens: opt.maxTok || 4096 };   // 思考に使われる分も見込んで多めにする
   if (opt.schema) { gc.responseMimeType = 'application/json'; gc.responseSchema = opt.schema; }
   const body = { systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts }], generationConfig: gc };
@@ -2471,7 +2507,12 @@ async function gmCall(model, system, parts, opt, signal) {
   let j = null; try { j = await r.json(); } catch (_) {}
   if (!r.ok) {
     const msg = (j && j.error && j.error.message) || ('HTTP ' + r.status);
-    const er = new Error(`Geminiがエラーを返しました（${r.status}）：${String(msg).slice(0, 120)}`);
+    let hint = '';
+    if (r.status === 404) {                  // モデルが見つからない・廃止された：利用できるモデルを案内する
+      gmAuto = '';
+      try { const nm = (await gmListModels(signal)).filter(n => /^gemini-\d/.test(n)); if (nm.length) hint = '　利用できるモデル：' + nm.slice(0, 12).join('、') + '（設定の Gemini タブでモデルIDを変更するか、空にすると自動で選びます）'; } catch (_) {}
+    }
+    const er = new Error(`Geminiがエラーを返しました（${r.status}）：${String(msg).slice(0, 120)}${hint}`);
     er.status = r.status; if (r.status === 401 || r.status === 403 || /API key/i.test(msg)) er.conn = true;   // キーの誤りなどは、残りも試さない
     throw er;
   }
@@ -2480,15 +2521,14 @@ async function gmCall(model, system, parts, opt, signal) {
   if (!txt) throw new Error('Geminiの応答が空でした（' + ((j && j.promptFeedback && j.promptFeedback.blockReason) || (c && c.finishReason) || '理由不明') + '）');
   return txt;
 }
-async function gmTest() {                    // 設定ダイアログの「接続テスト」（入力中のキー・モデルで確認）
-  const key = $('#setGmKey').value.trim(), model = $('#setGmModel').value.trim() || 'gemini-2.5-flash';
+async function gmTest() {                    // 設定ダイアログの「接続テスト」（入力中のキー・モデルで確認し、使えるモデルを案内する）
+  const key = $('#setGmKey').value.trim(), want = $('#setGmModel').value.trim().replace(/^models\//, '');
   if (!key) return toast('API キーを入力してください');
   toast('接続を確認中…');
   try {
-    const r = await fetch(GM_BASE + '/models/' + encodeURIComponent(model), { headers: { 'x-goog-api-key': key } });
-    const j = await r.json().catch(() => null);
-    if (!r.ok) throw new Error((j && j.error && j.error.message) || ('HTTP ' + r.status));
-    toast(`接続できました：${j.displayName || j.name || model}`);
+    const names = await gmListModels(null, key), pick = gmPick(names);
+    if (want && !names.includes(want)) toast(`モデル「${want}」は見つかりません。利用できるモデル：${names.filter(n => /^gemini-\d/.test(n)).slice(0, 10).join('、')}`);
+    else toast(`接続できました。使用するモデル：${want || pick || '（見つかりません）'}（利用可能 ${names.length} 件）`);
   } catch (e) { toast('接続できません：' + String((e && e.message) || e).slice(0, 120)); }
 }
 const lmList = s => cleanTags((s || '').split(/[,，、\n]/));
@@ -3021,7 +3061,7 @@ async function descNodeRun(n, prov) {                // ノード：LM Studio �
   lmBusy = true; descLoad();
   try {
     if (hashJobs.size) await Promise.all([...hashJobs.values()]);
-    const gm = prov === 'gemini', base = gm ? GM_SRC : lmBaseOf(settings.lmUrl), model = gm ? gmModel() : await lmModelId(base);
+    const gm = prov === 'gemini', base = gm ? GM_SRC : lmBaseOf(settings.lmUrl), model = gm ? await gmResolveModel() : await lmModelId(base);
     toast(`説明文を生成中…（${model}）`);
     const d = await lmDescribe(base, model, n);
     descPut(descKeyOf(model, n), embKey(n), d); descSave();
@@ -3034,7 +3074,7 @@ async function descArrowRun(a, prov) {               // 矢印：前後のノー
   lmBusy = true; descLoad();
   try {
     if (hashJobs.size) await Promise.all([...hashJobs.values()]);
-    const gm = prov === 'gemini', base = gm ? GM_SRC : lmBaseOf(settings.lmUrl), model = gm ? gmModel() : await lmModelId(base);
+    const gm = prov === 'gemini', base = gm ? GM_SRC : lmBaseOf(settings.lmUrl), model = gm ? await gmResolveModel() : await lmModelId(base);
     const get = async n => {                 // 説明文がなければ先にノードの説明文を生成する
       let d = descCache.get(descKeyOf(model, n)) || descIdx.get(embKey(n));
       if (!d) { toast(`ノード「${n.name}」の説明文を生成中…`); d = await lmDescribe(base, model, n); descPut(descKeyOf(model, n), embKey(n), d); }
@@ -3062,7 +3102,7 @@ async function autoTagLM(only, prov) {
   const vocab = lmList(settings.vocab);
   let ok = 0, fail = 0, firstErr = '';
   try {
-    const model = gm ? gmModel() : await lmModelId(base, ac.signal);
+    const model = gm ? await gmResolveModel() : await lmModelId(base, ac.signal);
     for (let i = 0; i < list.length && !ac.signal.aborted; i++) {
       toast(`タグ付け中… ${i + 1}/${list.length}（${model}）`);
       try {
@@ -3424,7 +3464,7 @@ $('#setOk').onclick = () => {
   { const zl = parseFloat($('#setZoomMin').value), zh = parseFloat($('#setZoomMax').value);
     settings.zoomMin = isFinite(zl) && zl > 0 ? clamp(zl, 0.01, 1) : settings.zoomMin;
     settings.zoomMax = isFinite(zh) && zh > 0 ? clamp(zh, 1, 20) : settings.zoomMax; }
-  settings.gmKey = $('#setGmKey').value.trim(); settings.gmModel = $('#setGmModel').value.trim(); gmSchemaOK = true;
+  settings.gmKey = $('#setGmKey').value.trim(); settings.gmModel = $('#setGmModel').value.trim().replace(/^models\//, ''); gmSchemaOK = true; gmAuto = '';
   settings.noThink = $('#setNoThink').checked; lmPrefillOK = lmSchemaOK = true;   // 設定を変えたら対応状況の判定をやり直す
   try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (_) {}
   $('#setDlg').hidden = true; toast('設定を保存しました');
