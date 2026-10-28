@@ -49,7 +49,8 @@
   .card .hint{font-size:12px;color:#aab2c5;line-height:1.5}
   body.dragging::after{content:'ここにドロップして画像・動画を再リンク';position:fixed;inset:8px;z-index:80;display:flex;align-items:center;justify-content:center;
     border:3px dashed var(--accent);border-radius:16px;background:#000a;color:var(--accent);font-size:16px;pointer-events:none}
-  #modeBtn,#arrBtn{min-width:44px;padding:0 10px;font-size:18px;line-height:1}
+  #modeBtn,#arrBtn,#selBtn{min-width:44px;padding:0 10px;font-size:18px;line-height:1}
+  #selBtn.off{opacity:.45}
   .card{background:#23262f;border:1px solid #444a5c;border-radius:14px;padding:16px;width:min(340px,90vw);
     display:flex;flex-direction:column;gap:12px}
   .card input,.card textarea,.card select{font:inherit;font-size:16px;color:var(--fg);background:var(--bg);border:1px solid #444a5c;
@@ -125,6 +126,7 @@
     <button id="fileBtn" aria-label="ファイル操作">📁</button>
     <button id="modeBtn" aria-label="編集モード"></button>
     <button id="arrBtn" aria-label="編集" title="編集">🛠</button>
+    <button id="selBtn" aria-label="選択モード"></button>
   </div>
   <div class="row" id="connRow" hidden>
     <button id="cFwd">選択順 →</button>
@@ -318,6 +320,11 @@ const MODES = {
   hand: '✋ ハンド'
 };
 const MODE_ICON = { pencil: '✏️', connect: '🔗', layout: '📐', hand: '✋' };
+/* 選択モード（レイアウトモードのタップ・スワイプの動作）：single＝一つ選択／multi＝複数選択（タップで追加・解除）／range＝範囲選択（空きをスワイプで範囲選択） */
+const SELMODES = { single: '👆 一つ選択', multi: '☑️ 複数選択', range: '⬚ 範囲選択' };
+const SEL_ICON = { single: '👆', multi: '☑️', range: '⬚' };
+let selMode = 'single';
+try { const v = localStorage.getItem('keyframe-map.selmode'); if (SELMODES[v]) selMode = v; } catch (_) {}
 const NODE_W = 120, NODE_H = 44;
 
 let toastT = 0;
@@ -1205,9 +1212,23 @@ function setMode(m) {
     else if (sel.nodes.length > 1) sel.nodes = [sel.nodes[sel.nodes.length - 1]];
   }
   $('#connRow').hidden = m !== 'connect';
+  $('#selBtn').classList.toggle('off', m !== 'layout');
   $('#modeBtn').textContent = MODE_ICON[m];
   $('#modeBtn').title = $('#modeBtn').ariaLabel = MODES[m].replace(/^\S+\s*/, '');
   updateConnUI(); draw(); toast(MODES[m]);
+}
+
+function setSelMode(m) {
+  selMode = m; band = null;
+  try { localStorage.setItem('keyframe-map.selmode', m); } catch (_) {}
+  if (m === 'single' && (sel.nodes.length + sel.garrows.length > 1 || sel.grp)) {   // 複数選択から一つ選択へ：最後に選んだ1つだけを残す
+    const ln = sel.nodes[sel.nodes.length - 1], la = sel.garrows[sel.garrows.length - 1];
+    sel.nodes = ln ? [ln] : []; sel.arrow = ln ? null : (la || null); sel.garrows = []; sel.grp = false;
+  }
+  $('#selBtn').textContent = SEL_ICON[m];
+  $('#selBtn').title = $('#selBtn').ariaLabel = '選択モード：' + SELMODES[m].replace(/^\S+\s*/, '');
+  updateConnUI(); draw();
+  toast(SELMODES[m] + (mode === 'layout' ? '' : '（レイアウトモードで有効）'));
 }
 
 /* ---------- ポップアップ ---------- */
@@ -1228,12 +1249,16 @@ function showPopup(x, y, items) {
 }
 function closePopups() { popup.hidden = true; }
 document.addEventListener('pointerdown', e => {
-  if (!e.target.closest('#popup') && !e.target.closest('#fileBtn') && !e.target.closest('#modeBtn') && !e.target.closest('#arrBtn')) closePopups();
+  if (!e.target.closest('#popup') && !e.target.closest('#fileBtn') && !e.target.closest('#modeBtn') && !e.target.closest('#arrBtn') && !e.target.closest('#selBtn')) closePopups();
 }, true);
 
 $('#modeBtn').onclick = e => {
   const r = e.currentTarget.getBoundingClientRect();
   showPopup(r.left, r.bottom + 6, Object.keys(MODES).map(k => ({ label: MODES[k], on: k === mode, fn: () => setMode(k) })));
+};
+$('#selBtn').onclick = e => {
+  const r = e.currentTarget.getBoundingClientRect();
+  showPopup(r.left, r.bottom + 6, Object.keys(SELMODES).map(k => ({ label: SELMODES[k], on: k === selMode, fn: () => setSelMode(k) })));
 };
 $('#arrBtn').onclick = e => {
   const r = e.currentTarget.getBoundingClientRect();
@@ -1602,7 +1627,11 @@ function onTap(g) {
   const tx = hitTagX(g.w.x, g.w.y);          // タグの「×」をタップ：そのタグを削除
   if (tx) { removeTag([tx.o], tx.tag); toast(`タグ「${tx.tag}」を削除しました`); return; }
   const hit = g.hit;
-  if (g.ctrl) { if (hit) ctrlToggle(hit); return; }   // Ctrl＋クリック：選択に追加／解除
+  if (g.ctrl || (mode === 'layout' && selMode === 'multi')) {   // Ctrl＋クリック／複数選択モード：選択に追加／解除
+    if (hit) ctrlToggle(hit);
+    else if (!g.ctrl) { clearSel(); updateConnUI(); draw(); }   // 複数選択モードで空きをタップ：選択を解除
+    return;
+  }
   if (hit && hit.type === 'node') selectNode(hit.id);
   else if (hit && hit.type === 'arrow') {
     const a = arrowById(hit.id);
@@ -1746,7 +1775,7 @@ cv.addEventListener('pointermove', e => {
   if (!g.moved && Math.hypot(dx, dy) > 8) { g.moved = true; clearTimeout(g.timer); }
   if (!g.moved) return;
   if (g.drags) { g.px = e.clientX; g.py = e.clientY; applyDrag(); startAutoScroll(); }
-  else if (mode === 'layout') band = { x0: g.sx, y0: g.sy, x1: e.clientX, y1: e.clientY };   // 範囲選択
+  else if (mode === 'layout' && selMode === 'range') band = { x0: g.sx, y0: g.sy, x1: e.clientX, y1: e.clientY };   // 範囲選択モード：範囲選択（それ以外はキャンバスをスクロール）
   else { view.x = g.vx + dx; view.y = g.vy + dy; }
   draw();
 });
@@ -3750,6 +3779,8 @@ resize();
 view.x = W / 2; view.y = H / 2;
 try { const s = localStorage.getItem(STORE); if (s) deserialize(JSON.parse(s)); } catch (_) {}
 lastSnap = takeSnap();
+$('#selBtn').textContent = SEL_ICON[selMode];
+$('#selBtn').title = $('#selBtn').ariaLabel = '選択モード：' + SELMODES[selMode].replace(/^\S+\s*/, '');
 setMode('pencil');
 
 if ('serviceWorker' in navigator) {
