@@ -1481,8 +1481,13 @@ function onLong(g) {
   if (inGrp) {
     if (navigator.vibrate) navigator.vibrate(15);
     const { ns, fa } = selParts(), tg = [...ns, ...fa];
+    const imgNs = ns.filter(n => n.image && media.has(n.image));   // 画像のタグ付けはノードだけが対象（矢印は対象外）
     showPopup(g.sx, g.sy, [
       { label: '🏷 タグを追加', disabled: !tg.length, fn: () => tagAddMenu(g.sx, g.sy, tg) },
+      { label: tagging ? '⏹ タグ付けを中止' : `🤖 LM Studioで一括タグ付け（ノード ${imgNs.length} 件）`, disabled: !tagging && !imgNs.length, fn: () => autoTagLM(imgNs) },
+      { label: tagging ? '⏹ タグ付けを中止' : `✨ Geminiで一括タグ付け（ノード ${imgNs.length} 件）`, disabled: !tagging && !imgNs.length, fn: () => autoTagLM(imgNs, 'gemini') },
+      { label: `📝 LM Studioで一括説明文追加（ノード ${imgNs.length} 件）`, disabled: !imgNs.length, fn: () => descNodesBulk(imgNs) },
+      { label: `✨ Geminiで一括説明文追加（ノード ${imgNs.length} 件）`, disabled: !imgNs.length, fn: () => descNodesBulk(imgNs, 'gemini') },
       { label: '🏷 タグを一括削除', disabled: !tg.some(o => o.tags && o.tags.length), fn: () => tagDelMenu(g.sx, g.sy, tg) },
       { label: '📋 コピー (Ctrl+C)', fn: () => copySel() },
       { label: '✂️ 切り取り (Ctrl+X)', fn: cutSel },
@@ -3138,6 +3143,12 @@ async function lmPump() {
   } finally { lmQRun = false; }
 }
 const descNodeLM = (n, prov) => lmEnqueue('n' + n.id + (prov || ''), 'ノード「' + (n.name || n.image) + '」の説明文', () => descNodeRun(n, prov));
+function descNodesBulk(list, prov) {               // 複数選択：選択中のノードの説明文を順番待ちに入れて、順に生成する
+  const gm = prov === 'gemini';
+  if (gm && !(settings.gmKey || '').trim()) return toast('設定の Gemini タブで API キーを入力してください');
+  if (!confirm(`${list.length} 件の画像を ${gm ? 'Google の Gemini API' : lmBaseOf(settings.lmUrl)} に送って説明文を追加します。よろしいですか？`)) return;
+  list.forEach(n => descNodeLM(n, prov));
+}
 const descArrowLM = (a, prov) => lmEnqueue('a' + a.id + (prov || ''), '矢印の説明文', () => descArrowRun(a, prov));
 async function descNodeRun(n, prov) {                // ノード：LM Studio で英語の説明文を生成して保存する
   if (!n.image || !media.has(n.image)) return toast('再リンク済みの画像がありません');
@@ -3174,7 +3185,8 @@ async function autoTagLM(only, prov) {
   if (tagging) { if (confirm('タグ付けを中止しますか？')) tagging.abort(); return; }
   closePopups();
   // 対象：ノードを選択中ならその画像ノード、なければタグのない画像ノードすべて
-  let list = only ? [only] : sel.nodes.map(nodeById).filter(n => n && n.image && media.has(n.image));
+  const okImg = n => n && n.image && media.has(n.image);
+  let list = only ? [].concat(only).filter(okImg) : sel.nodes.map(nodeById).filter(okImg);   // only＝1つのノードまたはノードの配列（複数選択の一括タグ付け）
   const picked = !!only || sel.nodes.length > 0;
   if (!picked) list = nodes.filter(n => n.image && media.has(n.image) && !(n.tags && n.tags.length));
   if (!list.length) return toast(picked ? '選択したノードに、再リンク済みの画像がありません' : 'タグのない画像ノードがありません（ノードを選択すると、選択分にタグを追加します）');
