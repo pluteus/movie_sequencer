@@ -211,10 +211,6 @@
         <input id="setLmModel" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="LM Studio のモデル名">
       </label>
       <label style="flex-direction:row;align-items:center;gap:8px"><input id="setNoThink" type="checkbox" style="width:auto;padding:0"><span>思考を飛ばす（空の thinking を返答の先頭に入れる）</span></label>
-      <label>説明文の項目（1行に1項目。「項目名: (例・選択肢)」の形式。行の追加・削除・並べ替えができます）
-        <textarea id="setDescFmt" rows="8" spellcheck="false" autocapitalize="off" autocorrect="off" style="font-size:13px;line-height:1.4;resize:vertical;white-space:pre"></textarea>
-      </label>
-      <div class="btns"><button id="setDescFmtReset" type="button">↺ 説明文の項目を初期値に戻す</button></div>
       <label>無声音の許可リスト（矢印の説明文用・カンマ区切り。空なら使わない）
         <input id="setSoundOk" type="text" spellcheck="false" placeholder="吐息, 溜息, 舌打ち, 咀嚼音">
       </label>
@@ -1265,7 +1261,7 @@ $('#arrBtn').onclick = e => {
     { label: '↷ リドゥ', disabled: !redoSt.length, fn: redo },
     { label: '🏷 タグの類似度でソート', fn: () => arrange('tag') },
     { label: '🖼 画像の類似度でソート', fn: () => arrange('image') },
-    { label: '🖼 説明文の項目でソート（LM Studio・英語の説明文）', fn: () => arrange('imageLM') },
+    { label: '🖼 説明文の類似度でソート（LM Studio・英語の説明文）', fn: () => arrange('imageLM') },
     { label: tagging ? '⏹ タグ付けを中止' : '🤖 画像にタグ付け（LM Studio）', fn: () => autoTagLM() },
     { label: tagging ? '⏹ タグ付けを中止' : '✨ 画像にタグ付け（Gemini）', fn: () => autoTagLM(null, 'gemini') }
   ]);
@@ -2796,17 +2792,6 @@ function descLoad() {
 function descSave() {
   try { const o = {}; [...descCache].slice(-800).forEach(([k, v]) => { o[k] = v; }); localStorage.setItem(DESC_KEY, JSON.stringify(o)); } catch (_) {}
 }
-const DESC_FMT_DEFAULT = [
-  'Body orientation: (front / three-quarter left / three-quarter right / left side / right side / back)',
-  'Posture: (standing / sitting / kneeling / crouching / leaning forward / leaning back / lying ...)',
-  'Head and gaze: (head tilt, facing direction, where the eyes look)',
-  'Expression: (smiling / neutral / surprised / eyes closed / mouth open ...)',
-  'Left arm and hand: (position and gesture, from the viewer\'s left)',
-  'Right arm and hand: (position and gesture, from the viewer\'s right)',
-  'Legs: (stance, knees, feet)'
-].join('\n');
-const descFmtList = t => String(t || '').split('\n').map(x => x.trim()).filter(Boolean).slice(0, 20);   // 設定の項目（1行1項目）
-const descFields = () => { const l = descFmtList(settings.descFmt); return l.length ? l : descFmtList(DESC_FMT_DEFAULT); };
 /* 設定のタグの語彙（優先）・ネガティブリスト（禁止）を説明文の指示に反映する。日本語の語は英訳した語で統一させる */
 function vocabLines() {
   const pos = lmList(settings.vocab), ng = lmList(settings.vocabNg), r = [];
@@ -2816,11 +2801,9 @@ function vocabLines() {
 }
 function descPrompt() {
   return [
-    'Describe the character in this image, in English, using exactly the following fields (one line per field, in this order, short phrases, no extra text):',
-    ...descFields(),
+    'Describe the character in this image in English, in free form: 2 to 5 short sentences or short lines covering the body orientation, posture, head and gaze, facial expression, and the position and gesture of the arms, hands and legs (left and right from the viewer\'s point of view).',
     ...vocabLines(),
-    ...(descFields().some(l => /[(/,]\s*empty\s*[/,)]/i.test(l)) ? ['When a field lists "empty" as a choice, write "empty" for that field if none of its other choices applies.'] : []),
-    'Unless a field above asks for it, ignore the background, clothing design, colors and art style. Use the same wording for the same pose across images.'
+    'Ignore the background, clothing design, colors and art style unless they matter to the pose. Use the same wording for the same pose across images. Output only the description, no headings or markdown.'
   ].join('\n');
 }
 async function lmChatText(base, model, system, user, signal, maxTok) {   // テキストを返すチャット呼び出し（思考なし指定の自動切替つき）
@@ -2908,90 +2891,6 @@ async function lmDescEmbs(list, signal) {      // list の各ノードの説明�
     if (d.length !== Math.min(16, texts.length - i)) throw new Error('埋め込みの件数が一致しません');
     d.forEach(x => out.push(Float32Array.from(x.embedding)));
   }
-  return out;
-}
-/* 説明文の項目の選択肢の並び順による、階層的な並べ替え。
-   設定の項目のうち「項目名: (A / B / C)」（/ 区切り、または空白なしの , 区切り）の形のものを選択肢として扱い、
-   1つ目の項目で左右に分け、その内側を2つ目の項目で上下に分け、さらにその内側を3つ目の項目で左右に…と、交互に細分化する。
-   各項目では、選択肢の並びの先頭ほど左（上）に置く。判定できなかったものは各グループの最後 */
-function descChoiceFields() {
-  const fields = [];
-  descFields().forEach(line => {
-    const c = line.indexOf(':'); if (c < 0) return;
-    const h = line.slice(c + 1), a = h.indexOf('('), b = h.lastIndexOf(')'); if (a < 0 || b <= a) return;
-    const inner = h.slice(a + 1, b), sep = inner.includes('/') ? /\// : /,(?!\s)/;   // 「stance, knees」のような説明文は選択肢にしない
-    if (!sep.test(inner)) return;
-    const opts = inner.split(sep).map(x => x.replace(/(\.{2,}|…)\s*$/, '').trim()).filter(x => x && x.length <= 40);
-    if (opts.length >= 2) fields.push({ name: line.slice(0, c).trim(), opts });
-  });
-  return fields;
-}
-const dNorm = t => t.toLowerCase().replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ').trim();
-function descFieldValue(text, name) {
-  const nn = dNorm(name.replace(/[^\w\s\-぀-ヿ一-鿿]/g, ''));
-  for (const ln of text.split('\n')) {
-    const c = ln.indexOf(':');
-    if (c > 0 && dNorm(ln.slice(0, c).replace(/[^\w\s\-぀-ヿ一-鿿]/g, '')) === nn) return ln.slice(c + 1);
-  }
-  return '';
-}
-function descPickOpt(val, opts) {            // 値の中で最初に現れる選択肢（同じ位置なら長いほう）の番号。なければ -1
-  const v = dNorm(val), vc = v.replace(/ /g, ''); let best = -1, bp = Infinity, bl = 0;
-  const emp = opts.findIndex(op => dNorm(op) === 'empty');   // 「empty」は特別な選択肢：ほかのどれにも当てはまらないときに選ばれる（並びの位置の優先度で扱う）
-  opts.forEach((op, i) => {
-    const o = dNorm(op); if (!o || i === emp) return;
-    const m = new RegExp('(^|[^a-z0-9])' + o.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![a-z0-9])').exec(v);
-    let pos = m ? m.index + m[1].length : -1;
-    if (pos < 0) { const k = o.replace(/ /g, ''); if (k.length >= 3 && (pos = vc.indexOf(k)) >= 0) pos += 1000; }   // 「full body」と「fullbody」などの表記ゆれ
-    if (pos >= 0 && (pos < bp || (pos === bp && o.length > bl))) { best = i; bp = pos; bl = o.length; }
-  });
-  return best >= 0 ? best : emp;
-}
-let descSortKeys = null, descSortDepth = 0;
-async function sortedByDescFields() {
-  if (hashJobs.size) await Promise.all([...hashJobs.values()]);
-  const list = nodes.filter(n => n.image && media.has(n.image)), none = nodes.filter(n => !list.includes(n)).sort((a, b) => natCmp(a.name, b.name));
-  if (!list.length) throw new Error('再リンク済みの画像ノードがありません');
-  const fields = descChoiceFields();
-  if (!fields.length) throw new Error('設定の説明文の項目に選択肢がありません（「項目名: (A / B / C)」の形式で書いてください）');
-  while (lmBusy || tagging) await new Promise(r => setTimeout(r, 400));   // 説明文の生成などが終わるまで待つ
-  let texts; lmBusy = true;
-  try { texts = await lmEnsureDescs(list); } finally { lmBusy = false; }
-  const keys = new Map(); let unknown = 0;
-  list.forEach((n, i) => {                   // 項目ごとの選択肢の番号（判定できなければ最後）
-    const k = fields.map(f => { const j = descPickOpt(descFieldValue(texts[i], f.name), f.opts); return j >= 0 ? j : f.opts.length; });
-    keys.set(n.id, k);
-    if (k.every((v, j) => v === fields[j].opts.length)) unknown++;
-  });
-  list.sort((a, b) => {
-    const ka = keys.get(a.id), kb = keys.get(b.id);
-    for (let j = 0; j < ka.length; j++) if (ka[j] !== kb[j]) return ka[j] - kb[j];
-    return natCmp(a.name, b.name);
-  });
-  descSortKeys = keys; descSortDepth = fields.length;
-  simNote = '説明文の項目（' + fields.map((f, j) => f.name + (j % 2 ? '＝上下' : '＝左右')).join('→') + '）の階層順で並べ替え' + (unknown ? `、判定できなかった画像 ${unknown} 枚` : '');
-  return [...list, ...none];
-}
-function nestedPositions(order, cw, ch) {    // 階層ごとに左右・上下を交互に分けた配置（各ノードの中心座標）。選択肢のないノードは、同じ組の中で名前順に格子状に並べる
-  const keys = descSortKeys, nf = descSortDepth;
-  const lay = (items, d) => {
-    if (d >= nf || items.some(i => !keys.has(order[i].id))) {
-      const m = items.length, c = Math.ceil(Math.sqrt(m)), r = Math.ceil(m / c);
-      return { w: c * cw, h: r * ch, p: items.map((i, j) => ({ i, x: (j % c) * cw + cw / 2, y: ((j / c) | 0) * ch + ch / 2 })) };
-    }
-    const g = new Map();
-    items.forEach(i => { const k = keys.get(order[i].id)[d]; if (!g.has(k)) g.set(k, []); g.get(k).push(i); });
-    const horiz = d % 2 === 0, gap = (horiz ? cw : ch) * 0.8 / (1 + d);   // 組どうしの間隔（深い階層ほど狭く）
-    let off = 0, W = 0, H = 0; const P = [];
-    [...g.keys()].sort((a, b) => a - b).forEach((k, j) => {
-      const c = lay(g.get(k), d + 1), o = off + (j ? gap : 0);
-      c.p.forEach(q => P.push({ i: q.i, x: q.x + (horiz ? o : 0), y: q.y + (horiz ? 0 : o) }));
-      off = o + (horiz ? c.w : c.h); W = horiz ? off : Math.max(W, c.w); H = horiz ? Math.max(H, c.h) : off;
-    });
-    return { w: W, h: H, p: P };
-  };
-  const res = lay(order.map((_, i) => i), 0), out = new Array(order.length);
-  res.p.forEach(q => { out[q.i] = { x: q.x, y: q.y }; });
   return out;
 }
 /* ---------- 背景除去（ブラウザ内：transformers.js） ---------- */
@@ -3436,12 +3335,12 @@ async function arrange(kind) {
   if (arranging) return;
   if (!nodes.length && !arrows.some(a => isFree(a) && a.video)) return toast('並べ替えるノードがありません');
   arranging = true; closePopups();
-  toast(kind === 'tag' ? 'タグの類似度で並べ替え中…' : kind === 'imageLM' ? '説明文の項目の順で並べ替え中…' : '画像の類似度を計算して並べ替え中…');
+  toast(kind === 'tag' ? 'タグの類似度で並べ替え中…' : kind === 'imageLM' ? '説明文の類似度で並べ替え中…' : '画像の類似度を計算して並べ替え中…');
   try {
     await new Promise(r => setTimeout(r, 30));
     commitHist(); if (lastSnap) lastSnap.view = { ...view };   // アンドゥで表示位置も戻す
-    const order = kind === 'tag' ? sortedByTag() : kind === 'imageLM' ? await sortedByDescFields() : await sortedBySimilarity();
-    const st = nodes.length ? layoutNodes(order, kind !== 'tag', kind === 'imageLM' ? (cw, ch) => nestedPositions(order, cw, ch) : null) : { cross: 0, thru: 0, over: 0, back: 0 };
+    const order = kind === 'tag' ? sortedByTag() : kind === 'imageLM' ? await sortedBySimilarity(true) : await sortedBySimilarity();
+    const st = nodes.length ? layoutNodes(order, kind !== 'tag', null) : { cross: 0, thru: 0, over: 0, back: 0 };
     placeFreeArrows();
     fitView(); save(); draw();
     const note = [];
@@ -3525,12 +3424,12 @@ $('#fsBtn').onclick = async () => {
 const player = $('#player'), pImg = $('#pImg'), pVid = $('#pVid'), pCap = $('#pCap');
 /* 設定（端末のブラウザに保存） */
 const SET_KEY = 'keyframe-map.settings.v1';
-const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', descFmt: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true, upscaled: true, bgThr: 50, bgColor: 'transparent', bgCustom: '#ff00ff', bgModel: '', gmKey: '', gmModel: '', zoomMin: 0.15, zoomMax: 5, soundOk: '吐息, 溜息, 舌打ち, 咀嚼音' };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
+const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true, upscaled: true, bgThr: 50, bgColor: 'transparent', bgCustom: '#ff00ff', bgModel: '', gmKey: '', gmModel: '', zoomMin: 0.15, zoomMax: 5, soundOk: '吐息, 溜息, 舌打ち, 咀嚼音' };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
 try {
   const o = JSON.parse(localStorage.getItem(SET_KEY) || '{}');
   if (isFinite(o.still) && o.still >= 0) settings.still = clamp(+o.still, 0, 60);
   if (isFinite(o.loop) && o.loop >= 1) settings.loop = clamp(Math.round(+o.loop), 1, 99);
-  for (const k of ['lmUrl', 'lmModel', 'lmEmb', 'descFmt', 'vocab', 'vocabNg', 'soundOk', 'bgColor', 'bgCustom', 'bgModel', 'gmKey', 'gmModel']) if (typeof o[k] === 'string') settings[k] = o[k];
+  for (const k of ['lmUrl', 'lmModel', 'lmEmb', 'vocab', 'vocabNg', 'soundOk', 'bgColor', 'bgCustom', 'bgModel', 'gmKey', 'gmModel']) if (typeof o[k] === 'string') settings[k] = o[k];
   if (typeof o.noThink === 'boolean') settings.noThink = o.noThink;
   if (typeof o.upscaled === 'boolean') settings.upscaled = o.upscaled;
   if (isFinite(o.zoomMin) && o.zoomMin > 0) settings.zoomMin = clamp(+o.zoomMin, 0.01, 1);
@@ -3544,7 +3443,7 @@ $('#setBtn').onclick = () => {
   $('#setZoomMin').value = settings.zoomMin; $('#setZoomMax').value = settings.zoomMax; $('#setGmKey').value = settings.gmKey; $('#setGmModel').value = settings.gmModel;
   $('#setLmUrl').value = settings.lmUrl; $('#setLmModel').value = settings.lmModel; $('#setLmEmb').value = settings.lmEmb; $('#setVocab').value = settings.vocab; $('#setNoThink').checked = settings.noThink; $('#setUpscaled').checked = settings.upscaled;
   $('#setVocabNg').value = settings.vocabNg; $('#setTagMax').value = settings.tagMax;
-  $('#setDescFmt').value = descFields().join('\n'); $('#setSoundOk').value = settings.soundOk; $('#setBgThr').value = settings.bgThr; $('#setBgColor').value = settings.bgColor; $('#setBgCustom').value = settings.bgCustom; $('#setBgModel').value = settings.bgModel; syncBgUI();
+  $('#setSoundOk').value = settings.soundOk; $('#setBgThr').value = settings.bgThr; $('#setBgColor').value = settings.bgColor; $('#setBgCustom').value = settings.bgCustom; $('#setBgModel').value = settings.bgModel; syncBgUI();
   $('#setDlg').hidden = false;
 };
 document.querySelectorAll('#setTabs button').forEach(b => { b.onclick = () => {       // 設定のタブの切り替え
@@ -3556,14 +3455,12 @@ $('#setLmTest').onclick = lmTest;
 $('#setGmTest').onclick = gmTest;
 function syncBgUI() { $('#setBgThrV').textContent = $('#setBgThr').value; $('#setBgCustomRow').hidden = $('#setBgColor').value !== 'custom'; }
 $('#setBgThr').oninput = $('#setBgColor').onchange = syncBgUI;
-$('#setDescFmtReset').onclick = () => { $('#setDescFmt').value = DESC_FMT_DEFAULT; };
 $('#setOk').onclick = () => {
   const st = parseFloat($('#setStill').value), lp = parseInt($('#setLoop').value, 10);
   settings.still = isFinite(st) && st >= 0 ? clamp(Math.round(st * 10) / 10, 0, 60) : settings.still;
   settings.loop = isFinite(lp) && lp >= 1 ? clamp(lp, 1, 99) : settings.loop;
   settings.lmUrl = lmBaseOf($('#setLmUrl').value); settings.lmModel = $('#setLmModel').value.trim(); settings.lmEmb = $('#setLmEmb').value.trim(); settings.vocab = $('#setVocab').value.trim();
   settings.vocabNg = $('#setVocabNg').value.trim(); settings.tagMax = clamp(parseInt($('#setTagMax').value, 10) || 8, 1, 20);
-  { const l = descFmtList($('#setDescFmt').value).join('\n'); settings.descFmt = l === DESC_FMT_DEFAULT ? '' : l; }   // 初期値のままなら空にして、今後の初期値の変更に追従する
   settings.upscaled = $('#setUpscaled').checked; settings.soundOk = $('#setSoundOk').value.trim(); settings.bgThr = clamp(parseInt($('#setBgThr').value, 10) || 0, 0, 100); settings.bgColor = $('#setBgColor').value; settings.bgCustom = $('#setBgCustom').value; settings.bgModel = $('#setBgModel').value.trim();
   { const zl = parseFloat($('#setZoomMin').value), zh = parseFloat($('#setZoomMax').value);
     settings.zoomMin = isFinite(zl) && zl > 0 ? clamp(zl, 0.01, 1) : settings.zoomMin;
