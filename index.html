@@ -63,12 +63,9 @@
   #descClose[hidden]{display:none}
   #descLayer{position:fixed;inset:0;overflow:hidden;pointer-events:none}
   .dbox{position:absolute;left:0;top:0;transform-origin:0 0;pointer-events:auto;box-sizing:border-box;background:rgba(27,29,36,.92);
-    border:1px solid #ffb84d;border-radius:6px;padding:20px 6px 6px;font:11px/14px sans-serif;color:#e8ecf4;white-space:pre-wrap;
+    border:1px solid #ffb84d;border-radius:6px;padding:6px;font:11px/14px sans-serif;color:#e8ecf4;white-space:pre-wrap;
     overflow-wrap:anywhere;-webkit-user-select:text;user-select:text;cursor:text;-webkit-touch-callout:default}
-  .dbox .dhead{position:absolute;top:2px;right:4px;display:flex;gap:4px}
-  .dbox .dname{color:#ffb84d;font-weight:600;margin-bottom:4px;word-break:break-all;-webkit-user-select:text;user-select:text;cursor:text}
-  .dbox .dcopy{font:10px sans-serif;padding:1px 8px;border-radius:4px;border:1px solid #ffb84d;
-    background:transparent;color:#ffb84d;cursor:pointer;-webkit-user-select:none;user-select:none}
+  .dbox .dname{display:block;color:#ffb84d;font-weight:600;margin-bottom:4px;white-space:normal;overflow-wrap:anywhere;word-break:break-all;-webkit-user-select:text;user-select:text;cursor:text}
   .dbox .dname.prov{font-style:italic;font-weight:400}
   .dbox .dtxt{outline:none;min-height:14px}
   .dbox .dtxt:focus{background:rgba(255,184,77,.10);border-radius:3px}
@@ -1978,6 +1975,19 @@ async function planRelink(files) {           // 戻り値：{ plan:[{file,name,h
   }
   return { plan, renamed };
 }
+/* 動画ファイル名が「A.png_B.png…mp4」の形で、A.png・B.png のノードがあれば、A → 動画 → B につなぐ */
+const NAME_IMG_EXT = 'png|jpe?g|gif|webp|avif|bmp|svg|heic|heif';
+const VID_NAME_RE = new RegExp('^(.+?\\.(?:' + NAME_IMG_EXT + '))_(.+?\\.(?:' + NAME_IMG_EXT + '))(?:[_.\\-].*)?\\.[^.]+$', 'i');
+const nodeByFile = fn => nodes.find(n => n.image === fn) || nodes.find(n => !n.image && n.name === fn) || null;
+function linkByName(a) {
+  if (!a || !isFree(a) || !a.video) return false;
+  const m = VID_NAME_RE.exec(a.video); if (!m) return false;
+  const f = nodeByFile(m[1]), t = nodeByFile(m[2]);
+  if (!f || !t || f === t) return false;
+  if (arrows.some(x => x !== a && x.from === f.id && x.to === t.id)) return false;   // 同じ向きの矢印がすでにある
+  a.from = f.id; a.to = t.id; a.ux = a.uy = null; a.rt = 'idle';
+  return true;
+}
 let relinking = false;
 async function relinkFiles(files) {
   if (!files.length) return;
@@ -2036,7 +2046,7 @@ async function relinkRun(files) {
   const fresh = plan.map(p => p.file).filter(f => !used.has(f.name));
   const newImgs = fresh.filter(isImageFile), newVids = fresh.filter(f => !isImageFile(f) && isVideoFile(f));
   const placed = [];
-  let framed = 0, badVids = 0;               // フレームを自動生成できた動画の数／読み込めなかった動画の数
+  let framed = 0, badVids = 0, linkedN = 0;               // フレームを自動生成できた動画の数／読み込めなかった動画の数
   if (newImgs.length || newVids.length) {
     const o = freeOrigin();
     const spot = i => {                      // i番目のセルの中心
@@ -2060,6 +2070,7 @@ async function relinkRun(files) {
         () => { arrows = arrows.filter(x => x !== a); draw(); res(false); },   // 読み込めなければ取り消す
         () => res(true)));
       if (!ok) { badVids++; continue; }
+      if (linkByName(a)) { linkedN++; continue; }   // ファイル名から前後のノードが分かるときは、そこへつなぐ
       const h = Math.max(a.vh + 70, 160 * a.vh / a.vw + 40);          // 縦長の動画でも重ならない行の高さ
       if (col === SET_PER_ROW) { col = 0; rowTop += rowH; rowH = 0; }
       a.ux = o.x + SET_W / 2 + col * SET_W; a.uy = rowTop + h / 2;
@@ -2074,6 +2085,9 @@ async function relinkRun(files) {
     }
     clearSel(); updateConnUI();
   }
+  for (const a of arrows.slice()) {          // 再リンクした動画が、すでにある未リンクの矢印なら、同じ規則でつなぐ
+    if (isFree(a) && a.video && plan.some(p => p.name === a.video) && linkByName(a)) linkedN++;
+  }
   const filled = await fillEmptyFrames(new Set(plan.map(p => p.name)));   // リンク済みの矢印に一致した動画でも、前後の静止画が空なら生成
   fitView(true);                             // 再リンクの完了時に、全ノードが見えるようにズームアウトする
   save(); draw();
@@ -2083,7 +2097,8 @@ async function relinkRun(files) {
   if (serialN) parts.push(`同名で内容が異なるファイル ${serialN} 件に連番を付けて別々に保持`);
   if (newImgs.length) parts.push(`新規ノード ${newImgs.length} 件を追加`);
   if (filled) parts.push(`空または未リンクの自動生成の静止画 ${filled} 件を動画から生成`);
-  const addedVids = newVids.length - badVids;
+  const addedVids = newVids.length - badVids - linkedN;
+  if (linkedN) parts.push(`動画 ${linkedN} 件を、ファイル名から前後の静止画ノードにつないだ（A → 動画 → B）`);
   if (addedVids) parts.push(framed === addedVids
     ? `動画 ${framed} 件を追加（先頭・最終フレームのノードを自動生成して接続）`
     : `未リンクの矢印 ${addedVids} 件を追加（フレーム生成 ${framed} 件）`);
@@ -2726,25 +2741,19 @@ function drawDescs() {                       // render の最後に呼ぶ：選�
     let el = descBoxes.get(it.k);
     if (!el) {
       el = document.createElement('div'); el.className = 'dbox';
-      const hd = document.createElement('div'); hd.className = 'dhead';
-      const bn = document.createElement('button'); bn.className = 'dcopy'; bn.textContent = '名前コピー';
-      const b = document.createElement('button'); b.className = 'dcopy'; b.textContent = 'コピー';
-      hd.append(bn, b);
       const nm = document.createElement('div'); nm.className = 'dname';
       const t = document.createElement('div'); t.className = 'dtxt'; t.spellcheck = false;
       t.contentEditable = 'plaintext-only'; if (t.contentEditable !== 'plaintext-only') t.contentEditable = 'true';
-      bn.onclick = () => copyText(nm.textContent, 'ファイル名');
-      b.onclick = () => copyText(t.innerText.trim());
       t.onblur = () => commitDesc(el, t);                 // 編集は、フォーカスが外れたときに確定して保存する
       t.onkeydown = e => { if (e.key === 'Escape') { t.textContent = el.dataset.txt; t.blur(); } };   // Esc：編集を取り消す
       t.onpaste = e => { e.preventDefault(); document.execCommand('insertText', false, (e.clipboardData || window.clipboardData).getData('text')); };
-      el.append(hd, nm, t); layer.appendChild(el); descBoxes.set(it.k, el);
+      el.append(nm, t); layer.appendChild(el); descBoxes.set(it.k, el);
     }
-    const t = el.lastChild, nm = el.children[1], b = el.firstChild.lastChild;
+    const t = el.lastChild, nm = el.firstChild;
     el.dataset.idx = it.idx;
     if (nm.textContent !== it.name) nm.textContent = it.name;
     nm.classList.toggle('prov', !!it.prov); nm.title = it.prov ? '仮のファイル名（動画は未指定）' : '';
-    t.style.display = b.style.display = it.txt ? '' : 'none';     // 説明文がないときはファイル名だけ表示する
+    t.style.display = it.txt ? '' : 'none';     // 説明文がないときはファイル名だけ表示する
     if (el.dataset.txt !== it.txt && document.activeElement !== t) { el.dataset.txt = it.txt; t.textContent = it.txt; }
     el.style.width = it.W + 'px';
     const h0 = el.offsetHeight || 1;
