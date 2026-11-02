@@ -208,7 +208,7 @@
         <input id="setLmUrl" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="http://localhost:1234/v1">
       </label>
       <label>モデルID（空なら自動選択）
-        <input id="setLmModel" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="LM Studio のモデル名">
+        <input id="setLmModel" type="text" list="lmModelList" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="LM Studio のモデル名">
       </label>
       <label style="flex-direction:row;align-items:center;gap:8px"><input id="setNoThink" type="checkbox" style="width:auto;padding:0"><span>思考を飛ばす（空の thinking を返答の先頭に入れる）</span></label>
       <label>無声音の許可リスト（矢印の説明文用・カンマ区切り。空なら使わない）
@@ -222,14 +222,14 @@
         <input id="setGmKey" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="AIza…">
       </label>
       <label>モデルID（空なら、既定の gemini-3.1-flash-lite を使います）
-        <input id="setGmModel" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="gemini-3.1-flash-lite（models/ は不要）">
+        <input id="setGmModel" type="text" list="gmModelList" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="gemini-3.1-flash-lite（models/ は不要）">
       </label>
       <div class="btns"><button id="setGmTest" type="button">🔌 接続テスト</button></div>
       <div class="hint">長押しメニューの「✨ Geminiでタグ付け」「✨ Geminiで説明文を追加」と、🛠 編集メニューの「✨ 画像にタグ付け（Gemini）」で使います。タグの語彙・説明文の項目などの設定は、LM Studio と共通です。画像（キャラクター部分を切り出して縮小したもの）は Google の Gemini API に送信され、API キーはこの端末のブラウザにだけ保存されます。</div>
     </div>
     <div class="tabp" data-tab="tag" hidden>
       <label>埋め込みモデルID（説明文の類似度ソート用・空なら自動選択）
-        <input id="setLmEmb" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="例：text-embedding-nomic-embed-text-v1.5">
+        <input id="setLmEmb" type="text" list="lmEmbList" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="例：text-embedding-nomic-embed-text-v1.5">
       </label>
       <label>タグの語彙（任意・カンマ区切り）
         <input id="setVocab" type="text" placeholder="空なら自由にタグを付ける">
@@ -267,6 +267,7 @@
   </div>
 </div>
 
+<datalist id="lmModelList"></datalist><datalist id="lmEmbList"></datalist><datalist id="gmModelList"></datalist>
 <div id="toast"></div>
 
 <input id="imgPick" type="file" accept="image/*" hidden>
@@ -2541,6 +2542,10 @@ async function lmModelId(base, signal) {     // モデルIDが空なら、/model
   if (!ids.length) throw new Error('LM Studioにモデルがありません');
   return ids.find(id => /vl|vision/i.test(id)) || ids[0];
 }
+function fillList(sel, ids) {                // datalist（入力欄のドロップダウン候補）を差し替える
+  const dl = $(sel); dl.innerHTML = '';
+  ids.forEach(id => { const o = document.createElement('option'); o.value = id; dl.appendChild(o); });
+}
 async function lmTest() {                    // 設定ダイアログの「接続テスト」（入力中のURLで確認）
   const base = lmBaseOf($('#setLmUrl').value);
   toast('接続を確認中…');
@@ -2548,6 +2553,8 @@ async function lmTest() {                    // 設定ダイアログの「接�
     const r = await lmFetch(base, '/models', {}, 8000);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const ids = ((await lmJson(r)).data || []).map(m => m.id);
+    fillList('#lmModelList', ids.filter(id => !/embed/i.test(id)));   // モデルIDの欄のドロップダウンに流し込む
+    fillList('#lmEmbList', ids.filter(id => /embed|bge|e5|gte|minilm/i.test(id)));
     toast(ids.length ? `接続できました（${base}）。モデル：${ids.slice(0, 6).join('、')}${ids.length > 6 ? ' ほか' : ''}` : '接続できましたが、モデルが見つかりません');
   } catch (e) { toast(e.message); }
 }
@@ -2617,6 +2624,7 @@ async function gmTest() {                    // 設定ダイアログの「接�
   toast('接続を確認中…');
   try {
     const names = await gmListModels(null, key), use = want || GM_DEFAULT;
+    fillList('#gmModelList', names.slice().sort((a, b) => (/^gemini-\d/.test(b) - /^gemini-\d/.test(a)) || a.localeCompare(b)));   // モデルIDの欄のドロップダウンに流し込む（gemini-系を先頭に）
     if (!names.includes(use)) toast(`モデル「${use}」は見つかりません。利用できるモデル：${names.filter(n => /^gemini-\d/.test(n)).slice(0, 10).join('、')}`);
     else toast(`接続できました。使用するモデル：${use}${want ? '' : '（既定）'}（利用可能 ${names.length} 件）`);
   } catch (e) { toast('接続できません：' + String((e && e.message) || e).slice(0, 120)); }
