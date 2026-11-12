@@ -9,7 +9,8 @@
 <meta name="apple-mobile-web-app-title" content="KFマップ">
 <title>キーフレームマップ</title>
 <link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%231b1d24'/%3E%3Crect x='72' y='96' width='150' height='110' rx='18' fill='%234da3ff'/%3E%3Crect x='290' y='306' width='150' height='110' rx='18' fill='%23ffb84d'/%3E%3Cpath d='M222 160 C300 160 300 260 366 296' stroke='%23fff' stroke-width='22' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <style>
   :root{--bg:#1b1d24;--panel:#2a2d38;--panel2:#363a48;--fg:#e8ecf4;--accent:#ffb84d;--blue:#4da3ff}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -73,6 +74,31 @@
     background:#000c;color:#fff;padding:10px 16px;border-radius:20px;font-size:13px;z-index:90;
     pointer-events:none;opacity:0;transition:opacity .2s;max-width:90vw;text-align:center}
   #toast.show{opacity:1}
+
+  /* キューパネル・選択パネル（スタンドアロン版） */
+  #queueBtn{position:relative}
+  #queueBadge{position:absolute;top:-6px;right:-6px;min-width:20px;height:20px;border-radius:10px;background:#ff5f6d;color:#fff;
+    font-size:11px;line-height:20px;text-align:center;padding:0 5px}
+  #queuePanel{position:fixed;left:calc(8px + env(safe-area-inset-left));top:calc(108px + env(safe-area-inset-top));z-index:35;
+    width:min(430px,calc(100vw - 16px));max-height:calc(100vh - 140px);overflow-y:auto;background:#23262f;border:1px solid #444a5c;
+    border-radius:12px;box-shadow:0 8px 24px #0008;padding:10px;display:flex;flex-direction:column;gap:8px}
+  #queuePanel[hidden]{display:none}
+  .qpHead{display:flex;justify-content:space-between;align-items:center;font-weight:600}
+  .qpHead button{min-height:32px;padding:0 10px}
+  .qpNote{font-size:11px;color:#aab2c5;line-height:1.5}
+  .qpRow{display:flex;gap:8px;align-items:center;justify-content:space-between;background:var(--panel);border-radius:8px;padding:6px 8px;font-size:13px}
+  .qpRow button{min-height:32px;padding:0 10px;flex:none}
+  .qpEmpty{font-size:13px;color:#aab2c5}
+  #selPanel{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(10px + env(safe-area-inset-bottom));z-index:25;
+    width:min(560px,calc(100vw - 16px));max-height:46vh;overflow-y:auto;background:rgba(35,38,47,.97);border:1px solid #ffb84d;
+    border-radius:12px;box-shadow:0 8px 24px #000a;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+  #selPanel[hidden]{display:none}
+  .spHead{display:flex;justify-content:space-between;align-items:center;font-weight:600;gap:8px}
+  .spHead button{min-height:32px;padding:0 10px;flex:none}
+  .spTags{font-size:12px;color:#9fc6ff}
+  .spDesc{font-size:13px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
+  .spReq{font-size:12px;color:#ffb84d}
+  .spBtns button{min-height:38px;font-size:13px;padding:0 8px}
   /* 右上ボタン */
   #ui2{position:fixed;right:calc(8px + env(safe-area-inset-right));top:calc(8px + env(safe-area-inset-top));
     display:flex;gap:6px;z-index:10}
@@ -124,6 +150,7 @@
     <button id="modeBtn" aria-label="編集モード"></button>
     <button id="arrBtn" aria-label="編集" title="編集">🛠</button>
     <button id="selBtn" aria-label="選択モード"></button>
+    <button id="queueBtn" aria-label="キュー" title="キュー">📋<span id="queueBadge" hidden></span></button>
   </div>
   <div class="row" id="connRow" hidden>
     <button id="cFwd">選択順 →</button>
@@ -162,6 +189,25 @@
 
 <div id="popup" hidden></div>
 
+<div id="queuePanel" hidden>
+  <div class="qpHead"><span>📋 キュー</span><button id="queueClose" type="button">✕</button></div>
+  <div class="qpNote">Muse への依頼はキューに保存され、Muse アプリ（Space版）とプロジェクトデータを共有したときに処理されます。</div>
+  <div id="queueList"></div>
+</div>
+<div id="selPanel" hidden>
+  <div class="spHead"><span id="spTitle"></span><button id="spClose" type="button">✕</button></div>
+  <div id="spTags" class="spTags"></div>
+  <div id="spDesc" class="spDesc"></div>
+  <div id="spReq" class="spReq"></div>
+  <div class="btns spBtns">
+    <button id="spEdit" type="button">✏️ 説明文を編集</button>
+    <button id="spGenTag" type="button">🏷 タグ付け</button>
+    <button id="spGenDesc" type="button">📝 説明文を生成</button>
+    <button id="spQuick" type="button">✨ クイック生成</button>
+  </div>
+</div>
+
+
 <div id="dlg" hidden>
   <div class="card">
     <div>ノード名を入力、または画像・動画を選択</div>
@@ -184,6 +230,7 @@
       <button type="button" data-tab="std" class="on">標準</button>
       <button type="button" data-tab="lm">LM Studio</button>
       <button type="button" data-tab="gm">Gemini</button>
+      <button type="button" data-tab="oa">ChatGPT</button>
       <button type="button" data-tab="tag">タグ・説明文</button>
       <button type="button" data-tab="bg">背景除去</button>
     </div>
@@ -191,10 +238,10 @@
       <label>静止画の再生秒数（秒。0にすると静止画を飛ばして、動画だけを連続再生します）
         <input id="setStill" type="number" min="0" max="60" step="0.1" inputmode="decimal">
       </label>
-      <label>キャンバスのズーム倍率の下限（0.01〜1。初期値 0.15）
+      <label>キャンバスのズーム倍率の下限（0.01〜1。初期値 0.05）
         <input id="setZoomMin" type="number" min="0.01" max="1" step="0.01" inputmode="decimal">
       </label>
-      <label>キャンバスのズーム倍率の上限（1〜20。初期値 5）
+      <label>キャンバスのズーム倍率の上限（1〜20。初期値 8）
         <input id="setZoomMax" type="number" min="1" max="20" step="0.5" inputmode="decimal">
       </label>
       <label>同じ箇所の最大ループ回数
@@ -207,40 +254,78 @@
       <label>LM Studio のURL（画像のタグ付け・説明文用）
         <input id="setLmUrl" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="http://localhost:1234/v1">
       </label>
+      <label>APIキー（通常は不要。必要なサーバーのときだけ）
+        <input id="setLmKey" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="任意">
+      </label>
+      <div class="hint">🔑 キー取得先: <a href="https://lmstudio.ai" target="_blank" rel="noopener">https://lmstudio.ai</a>（LM Studio 本体。通常はキー不要です）</div>
       <label>モデルID（空なら自動選択）
         <input id="setLmModel" type="text" list="lmModelList" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="LM Studio のモデル名">
       </label>
       <label style="flex-direction:row;align-items:center;gap:8px"><input id="setNoThink" type="checkbox" style="width:auto;padding:0"><span>思考を飛ばす（空の thinking を返答の先頭に入れる）</span></label>
-      <label>無声音の許可リスト（矢印の説明文用・カンマ区切り。空なら使わない）
-        <input id="setSoundOk" type="text" spellcheck="false" placeholder="吐息, 溜息, 舌打ち, 咀嚼音">
+      <div class="btns"><button id="setLmModels" type="button">モデル一覧を取得</button><button id="setLmTest" type="button">🔌 接続テスト</button></div>
+      <label id="lmModelSelWrap" hidden>取得したモデル一覧（選ぶとモデルIDに入ります）
+        <select id="setLmModelSel"></select>
       </label>
-      <div class="hint">矢印の説明文（動画プロンプト）で、セリフや効果音のほかに書いてよい、言葉でない声・口の音です。このリストにあるものだけが使われます。画像は上のURLのサーバーにだけ送られます。</div>
-      <div class="btns"><button id="setLmTest">🔌 接続テスト</button></div>
+      <label style="flex-direction:row;align-items:center;gap:8px"><input type="radio" name="llmUse" id="setUseLm" value="lm" style="width:auto;padding:0"><span>このLLMを生成に使う（選択パネルのクイック生成）</span></label>
+      <div class="hint">矢印の説明文で使う「無声音の許可リスト」は「タグ・説明文」タブで設定します。画像は上のURLのサーバーにだけ送られます。</div>
     </div>
     <div class="tabp" data-tab="gm" hidden>
+      <label>Gemini のURL（OpenAI 互換 API）
+        <input id="setGmUrl" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://generativelanguage.googleapis.com/v1beta/openai">
+      </label>
       <label>Gemini API キー
         <input id="setGmKey" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="AIza…">
       </label>
+      <div class="hint">🔑 キー取得先: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">https://aistudio.google.com/apikey</a>（Google AI Studio・無料で作れます）</div>
       <label>モデルID（空なら、既定の gemini-3.1-flash-lite を使います）
-        <input id="setGmModel" type="text" list="gmModelList" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="gemini-3.1-flash-lite（models/ は不要）">
+        <input id="setGmModel" type="text" list="gmModelList" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="gemini-2.0-flash（models/ は不要）">
       </label>
-      <div class="btns"><button id="setGmTest" type="button">🔌 接続テスト</button></div>
-      <div class="hint">長押しメニューの「✨ Geminiでタグ付け」「✨ Geminiで説明文を追加」と、🛠 編集メニューの「✨ 画像にタグ付け（Gemini）」で使います。タグの語彙・説明文の項目などの設定は、LM Studio と共通です。画像（キャラクター部分を切り出して縮小したもの）は Google の Gemini API に送信され、API キーはこの端末のブラウザにだけ保存されます。</div>
+      <div class="btns"><button id="setGmModels" type="button">モデル一覧を取得</button><button id="setGmTest" type="button">🔌 接続テスト</button></div>
+      <label id="gmModelSelWrap" hidden>取得したモデル一覧（選ぶとモデルIDに入ります）
+        <select id="setGmModelSel"></select>
+      </label>
+      <label style="flex-direction:row;align-items:center;gap:8px"><input type="radio" name="llmUse" id="setUseGm" value="gemini" style="width:auto;padding:0"><span>このLLMを生成に使う（選択パネルのクイック生成）</span></label>
+      <div class="hint">長押しメニューのタグ付け・説明文の生成や、🛠 編集メニューの一括タグ付けで使います。タグ・説明文の設定は「タグ・説明文」タブで共通です。画像（キャラクター部分を切り出して縮小したもの）は Google の Gemini API に送信され（OpenAI 互換 API 経由で呼びます）、API キーはこの端末のブラウザ（localStorage）にだけ保存され、プロジェクトの保存データや JSON/ZIP には含まれません。</div>
+    </div>
+
+    <div class="tabp" data-tab="oa" hidden>
+      <label>ChatGPT (OpenAI) のURL
+        <input id="setOaUrl" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://api.openai.com/v1">
+      </label>
+      <label>OpenAI の API キー
+        <input id="setOaKey" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="sk-…">
+      </label>
+      <div class="hint">🔑 キー取得先: <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">https://platform.openai.com/api-keys</a></div>
+      <label>モデルID（空なら、利用できる中から画像対応モデルを自動選択）
+        <input id="setOaModel" type="text" list="oaModelList" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="gpt-4o-mini">
+      </label>
+      <div class="btns"><button id="setOaModels" type="button">モデル一覧を取得</button><button id="setOaTest" type="button">🔌 接続テスト</button></div>
+      <label id="oaModelSelWrap" hidden>取得したモデル一覧（選ぶとモデルIDに入ります）
+        <select id="setOaModelSel"></select>
+      </label>
+      <label style="flex-direction:row;align-items:center;gap:8px"><input type="radio" name="llmUse" id="setUseOa" value="chatgpt" style="width:auto;padding:0"><span>このLLMを生成に使う（選択パネルのクイック生成）</span></label>
+      <div class="hint">長押しメニューのタグ付け・説明文の生成や、🛠 編集メニューの一括タグ付けで使います。画像とプロンプトは OpenAI の API にだけ送られます。API キーはこの端末のブラウザ（localStorage）にだけ保存され、プロジェクトの保存データや JSON/ZIP には含まれません。</div>
     </div>
     <div class="tabp" data-tab="tag" hidden>
       <label>埋め込みモデルID（説明文の類似度ソート用・空なら自動選択）
         <input id="setLmEmb" type="text" list="lmEmbList" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="例：text-embedding-nomic-embed-text-v1.5">
       </label>
-      <label>タグの語彙（任意・カンマ区切り）
-        <input id="setVocab" type="text" placeholder="空なら自由にタグを付ける">
+      <label>ポジティブリスト（優先して使う語／観点・カンマ区切りでたくさん指定できます）
+        <textarea id="setVocab" rows="3" spellcheck="false" placeholder="笑顔, まばたき, 首を傾げる"></textarea>
       </label>
-      <label>タグの語彙（ネガティブリスト・カンマ区切り）
-        <input id="setVocabNg" type="text" placeholder="使わせないタグ（例：キャラクター、女の子）">
+      <label>ネガティブリスト（使わない語・カンマ区切りでたくさん指定できます）
+        <textarea id="setVocabNg" rows="2" spellcheck="false" placeholder="水着, 眼鏡"></textarea>
       </label>
-      <label>タグの最大数（1画像あたり）
-        <input id="setTagMax" type="number" min="1" max="20" step="1" inputmode="numeric">
+      <label>無声音の許可リスト（ネガティブリストの例外・1行に1つ）
+        <textarea id="setSoundOk" rows="3" spellcheck="false" placeholder="吐息&#10;溜息&#10;舌打ち&#10;咀嚼音"></textarea>
       </label>
-      <div class="hint">語彙を入れると、その中からだけタグを選びます（表記ゆれを防げます）。ネガティブリストのタグは使わせず、返ってきても除外します（全画像に共通するタグなどを外せます）。語彙は、説明文の生成でも、優先する語・使わない語として使われます。</div>
+      <label>タグの最大数（1画像あたり・1〜30。空欄のときは 8）
+        <input id="setTagMax" type="number" min="1" max="30" step="1" inputmode="numeric">
+      </label>
+      <div class="hint">ポジティブリストを入れると、その中からだけタグを選びます（表記ゆれを防げます）。ネガティブリストのタグは使わせず、返ってきても除外します（全画像に共通するタグなどを外せます）。ただし無声音の許可リストにある語は例外として残ります。ポジティブ／ネガティブは、説明文の生成でも、優先する語・使わない語として使われます。<br>
+      リストの区切りは半角カンマ（,）・全角カンマ（，）のどちらでもよく、改行や「、」での区切りも読み取りできます（旧形式との互換）。無声音の許可リストは1行に1つずつ書きます。<br>
+      外部LLMの生成ではこれらがプロンプトに反映され、生成されたタグにもアプリ側でネガティブ除去（許可リストの例外を除く）と最大数の上限が強制されます。手で付けたタグには適用されません。<br>
+      これらの設定はプロジェクトの settings として保存され、Muse への依頼の処理側でも読み取られます。</div>
     </div>
     <div class="tabp" data-tab="bg" hidden>
       <label>閾値（0〜100。大きいほど、背景として消える範囲が広がります）：<span id="setBgThrV"></span>
@@ -267,7 +352,7 @@
   </div>
 </div>
 
-<datalist id="lmModelList"></datalist><datalist id="lmEmbList"></datalist><datalist id="gmModelList"></datalist>
+<datalist id="lmModelList"></datalist><datalist id="lmEmbList"></datalist><datalist id="gmModelList"></datalist><datalist id="oaModelList"></datalist>
 <div id="toast"></div>
 
 <input id="imgPick" type="file" accept="image/*" hidden>
@@ -351,6 +436,7 @@ function registerFile(file, preHash) {      // preHash：計算済みのハッ�
   if (old) URL.revokeObjectURL(old);
   media.set(file.name, URL.createObjectURL(file));
   mediaFile.set(file.name, file);
+  idbPut(file.name, file);   // スタンドアロン版：再読み込みでも復元できるよう IndexedDB にも保存
   imgs.delete(file.name);
   arrows.forEach(a => { if (a.video === file.name) a.rt = 'idle'; });
   const v = vids.get(file.name);
@@ -720,6 +806,7 @@ function render() {
   arrows.forEach(drawVideo);
   arrows.forEach(a => { if (!a.video) drawTags(a); });   // 動画のない矢印は線の中間の下にタグを表示
   drawDescs();
+  updatePanel();
   drawGroupBox();
   ctx.restore();
 
@@ -796,7 +883,7 @@ function drawArrow(a) {
   ctx.lineTo(g.p2.x - hl * Math.cos(ang + .4), g.p2.y - hl * Math.sin(ang + .4));
   ctx.closePath(); ctx.fill();
   ctx.restore();
-  if (!a.video) arrowBadge(a, g.mid.x, g.mid.y);   // 動画のある矢印は、プレビューの角に表示する（drawVideo）
+  if (!a.video) { arrowBadge(a, g.mid.x, g.mid.y); drawReqBadge('arrow', a.id, g.mid.x, g.mid.y - 16, 'center'); }   // 動画のある矢印は、プレビューの角に表示する（drawVideo）
 }
 
 /* シークバー：左端＝開始ノードの静止画 / 中間＝動画 / 右端＝終了ノードの静止画 */
@@ -935,6 +1022,7 @@ function drawVideo(a) {
   ctx.fillText(fit(a.video, Math.max(w, 120)), g.vc.x, y + h + 28);
   ctx.restore();
   drawTags(a);
+  drawReqBadge('arrow', a.id, x + w, y - 6, 'right');
   ctx.save();
   if (g.free) {                              // ノードにつながっていない矢印の目印
     ctx.fillStyle = '#ffb84d'; ctx.font = 'bold 11px sans-serif';
@@ -945,6 +1033,12 @@ function drawVideo(a) {
   arrowBadge(a, x - 4, y - 4);
 }
 
+function drawReqBadge(tt, id, x, y, align) {   // 「🤖 依頼中」バッジ
+  if (!requests.some(r => r.status === 'pending' && r.targetType === tt && r.targetId === id)) return;
+  ctx.save(); ctx.fillStyle = '#ffb84d'; ctx.font = 'bold 11px sans-serif';
+  ctx.textAlign = align || 'left'; ctx.textBaseline = 'bottom';
+  ctx.fillText('🤖 依頼中', x, y); ctx.restore();
+}
 function drawNode(n) {
   const b = box(n), x = n.x - b.w / 2, y = n.y - b.h / 2;
   const idx = sel.nodes.indexOf(n.id), isSel = idx >= 0;
@@ -973,6 +1067,7 @@ function drawNode(n) {
     ctx.fillText(fit(n.name, b.w - 14), n.x, n.y);
   }
   ctx.restore();
+  drawReqBadge('node', n.id, x, y - 6);
   drawTags(n);
   ctx.save();
   if (isNow('node', n.id)) {
@@ -1262,6 +1357,10 @@ $('#arrBtn').onclick = e => {
     { label: '↷ リドゥ', disabled: !redoSt.length, fn: redo },
     { label: '🏷 タグの類似度でソート', fn: () => arrange('tag') },
     { label: '🖼 画像の類似度でソート', fn: () => arrange('image') },
+    { label: '🖼 画像の類似度でソート(LM Studio)', fn: () => arrangeLLM('lm') },
+    { label: '🖼 画像の類似度でソート(Gemini)', fn: () => arrangeLLM('gemini') },
+    { label: '🖼 画像の類似度でソート(ChatGPT)', fn: () => arrangeLLM('chatgpt') },
+    { label: '🖼 画像の類似度でソート(Muse)', fn: () => addRequest('project', null, 'sort') },
     { label: '🖼 説明文の類似度でソート（LM Studio・英語の説明文）', fn: () => arrange('imageLM') },
     { label: tagging ? '⏹ タグ付けを中止' : '🤖 画像にタグ付け（LM Studio）', fn: () => autoTagLM() },
     { label: tagging ? '⏹ タグ付けを中止' : '✨ 画像にタグ付け（Gemini）', fn: () => autoTagLM(null, 'gemini') }
@@ -1300,21 +1399,176 @@ function tagAddMenu(x, y, targets) {
       : [{ label: '（設定済みのタグはありません）', disabled: true, fn: () => {} }])
   ]);
 }
-function tagDescMenu(x, y, o) {              // ノード・矢印のサブメニュー「タグ・説明文を追加」
+
+/* ---------- タグ付け・説明文の生成メニュー（タップで開く入れ子） ---------- */
+const reqKindLabel = k => ({ tags: 'タグ付け', description: '説明文', both: 'タグ付け＋説明文', video: 'FLF2V動画', sort: '類似度ソート' })[k] || k;
+const targetLabel = o => isArrowObj(o) ? (o.video || '矢印') : (o.name || o.image || 'ノード');
+function editDesc(o) {                        // 説明文（desc）の手編集
+  const t = prompt((isArrowObj(o) ? '矢印' : 'ノード') + 'の説明文', o.desc || '');
+  if (t === null) return;
+  o.desc = t.trim(); save(); draw(); updatePanel();
+}
+function tagExistingMenu(x, y, targets) {     // マップ内で使われているタグから選ぶ
+  const tags = allTags();
+  showPopup(x, y, tags.length ? tags.map(t => ({ label: '🏷 ' + t, fn: () => tagToast(addTags(targets, [t]), t, '追加') }))
+    : [{ label: '（マップ内で使われているタグはありません）', disabled: true, fn: () => {} }]);
+}
+function queueFlf2v(a) {                      // Muse への FLF2V 動画生成依頼（プロンプトと前後フレームを snapshot に保存）
+  const f = nodeById(a.from), t = nodeById(a.to), ok = n => n && n.image && media.has(n.image);
+  if (!ok(f) || !ok(t)) return toast('前後の両方のノードに画像が必要です');
+  let promptText = a.desc || '';
+  if (!promptText) {                          // 日本語の説明文がなければ、英語のプロンプト用説明文を使う
+    descLoad();
+    const fd = nodeDesc(f), td = nodeDesc(t);
+    if (fd && td) promptText = descIdx.get(mKey(fd, td)) || '';
+  }
+  if (!promptText) return toast('先に矢印の説明文を作ってください（「📝 説明文を生成」→編集／各LLMで生成）');
+  addRequest('arrow', a.id, 'video', { prompt: promptText, fromImage: f.image, toImage: t.image, fromName: f.name, toName: t.name });
+}
+function genMenu(x, y, o, page) {             // ノード・矢印のサブメニュー「タグ付け／説明文を生成」
+  const node = !isArrowObj(o), tt = node ? 'node' : 'arrow';
+  const pend = requests.filter(r => r.status === 'pending' && r.targetType === tt && r.targetId === o.id);
+  const back = { label: '← 戻る', fn: () => genMenu(x, y, o) };
+  const sub = items => showPopup(x, y, [back, ...items]);
+  const tagMenu = () => sub([
+    { label: '✏️ 任意のタグ', fn: () => askTag([o]) },
+    { label: '🏷 既存のタグ', fn: () => tagExistingMenu(x, y, [o]) },
+    { label: '🤖 Museで生成', fn: () => addRequest(tt, o.id, 'tags') },
+    { label: '✨ Geminiで生成', fn: () => genTagsFor(o, 'gemini') },
+    { label: '✨ ChatGPTで生成', fn: () => genTagsFor(o, 'chatgpt') },
+    { label: '🤖 LM Studioで生成', fn: () => genTagsFor(o, 'lm') }
+  ]);
+  const descMenu = () => sub([
+    { label: '✏️ 編集', fn: () => editDesc(o) },
+    { label: '🤖 Museで生成', fn: () => addRequest(tt, o.id, 'description') },
+    { label: '✨ Geminiで生成', fn: () => genDescJP(o, 'gemini') },
+    { label: '✨ ChatGPTで生成', fn: () => genDescJP(o, 'chatgpt') },
+    { label: '🤖 LM Studioで生成', fn: () => genDescJP(o, 'lm') }
+  ]);
+  const bothMenu = () => sub([
+    { label: '🤖 Museで生成', fn: () => addRequest(tt, o.id, 'both') },
+    { label: '✨ Geminiで生成', fn: () => genBothJP(o, 'gemini') },
+    { label: '✨ ChatGPTで生成', fn: () => genBothJP(o, 'chatgpt') },
+    { label: '🤖 LM Studioで生成', fn: () => genBothJP(o, 'lm') }
+  ]);
+  if (page === 'tag') return tagMenu();
+  if (page === 'desc') return descMenu();
+  if (page === 'both') return bothMenu();
+  showPopup(x, y, [
+    ...pend.map(r => ({ label: '🤖 依頼を取り消し（' + reqKindLabel(r.kind) + '）', fn: () => cancelRequest(r.id) })),
+    { label: '🏷 タグ付け ▸', fn: tagMenu },
+    { label: '📝 説明文を生成 ▸', fn: descMenu },
+    { label: '🏷📝 タグ付け＋説明文を生成 ▸', fn: bothMenu },
+    { label: '🌐 プロンプト用説明文（英語）', fn: () => enDescMenu(x, y, o) }
+  ]);
+}
+function enDescMenu(x, y, o) {                // 従来の英語の説明文（動画プロンプトのコピー・説明文の類似度ソート用）
   const has = n => n && n.image && media.has(n.image), node = !isArrowObj(o);
   showPopup(x, y, [
-    { label: '🏷 タグを追加', fn: () => tagAddMenu(x, y, [o]) },
+    { label: '← 戻る', fn: () => genMenu(x, y, o) },
     ...(node ? [
-      { label: tagging ? '⏹ タグ付けを中止' : '🤖 LM Studioでタグ付け', disabled: !tagging && !has(o), fn: () => autoTagLM(o) },
       { label: '📝 LM Studioで説明文を追加', disabled: !has(o), fn: () => descNodeLM(o) },
-      { label: tagging ? '⏹ タグ付けを中止' : '✨ Geminiでタグ付け', disabled: !tagging && !has(o), fn: () => autoTagLM(o, 'gemini') },
-      { label: '✨ Geminiで説明文を追加', disabled: !has(o), fn: () => descNodeLM(o, 'gemini') }
+      { label: '✨ Geminiで説明文を追加', disabled: !has(o), fn: () => descNodeLM(o, 'gemini') },
+      { label: '✨ ChatGPTで説明文を追加', disabled: !has(o), fn: () => descNodeLM(o, 'chatgpt') }
     ] : [
       { label: '📝 LM Studioで説明文を追加（前後の静止画から動きを推測）', disabled: isFree(o) || !(has(nodeById(o.from)) && has(nodeById(o.to))), fn: () => descArrowLM(o) },
-      { label: '✨ Geminiで説明文を追加（前後の静止画から動きを推測）', disabled: isFree(o) || !(has(nodeById(o.from)) && has(nodeById(o.to))), fn: () => descArrowLM(o, 'gemini') }
+      { label: '✨ Geminiで説明文を追加（前後の静止画から動きを推測）', disabled: isFree(o) || !(has(nodeById(o.from)) && has(nodeById(o.to))), fn: () => descArrowLM(o, 'gemini') },
+      { label: '✨ ChatGPTで説明文を追加（前後の静止画から動きを推測）', disabled: isFree(o) || !(has(nodeById(o.from)) && has(nodeById(o.to))), fn: () => descArrowLM(o, 'chatgpt') }
     ])
   ]);
 }
+/* ---------- 日本語の説明文（desc）と矢印タグの直接生成 ---------- */
+function jpVocabLines() {                     // ポジティブ／ネガティブをプロンプトへ反映する行
+  const pos = lmList(settings.vocab), ng = lmList(settings.vocabNg), r = [];
+  if (pos.length) r.push('・優先して使う語／観点：' + pos.join('、'));
+  if (ng.length) r.push('・使わない語：' + ng.join('、'));
+  return r;
+}
+async function imgDataUrl(n) {                // キャラクター部分を切り出して縮小した data URL
+  const el = await loadImgEl(n.image);
+  if (!el || !el.naturalWidth) throw new Error('画像を読み込めません');
+  return cropCanvas(el, analyzeImage(el), 512).toDataURL('image/jpeg', 0.85);
+}
+async function llmDescribeNodeJP(base, model, n, signal) {
+  const url = await imgDataUrl(n);
+  const prompt = ['このキャラクターの静止画を日本語で説明してください。ポーズ・表情・向き・動作が分かるように、1〜3文で簡潔に書いてください。背景や画風には触れないでください。',
+    ...jpVocabLines(), '説明文だけを出力してください。'].join('\n');
+  return (await lmChatText(base, model, 'あなたはキャラクターのキーフレーム画像に説明文を付けるアシスタントです。',
+    [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url } }], signal, 500)).trim();
+}
+async function llmDescribeArrowJP(base, model, a, signal) {
+  const f = nodeById(a.from), t = nodeById(a.to);
+  const [u1, u2] = [await imgDataUrl(f), await imgDataUrl(t)];
+  const snd = lmList(settings.soundOk);
+  const prompt = ['1枚目が開始フレーム、2枚目が最終フレームの静止画です。この2つのポーズの間をつなぐモーション動画の説明文（動画プロンプト）を日本語で書いてください。キャラクターが開始のポーズから最終のポーズへどう動くかを、1〜3文で具体的に書いてください。',
+    ...jpVocabLines(),
+    ...(snd.length ? ['・書いてよい無声音（言葉でない声・口の音）は次のものだけです：' + snd.join('、')] : []),
+    '説明文だけを出力してください。'].join('\n');
+  return (await lmChatText(base, model, 'あなたはモーション動画のプロンプトを書くアシスタントです。',
+    [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: u1 } }, { type: 'image_url', image_url: { url: u2 } }], signal, 600)).trim();
+}
+function pushJob(label, ac) {                 // キューパネルで進捗管理する直接生成ジョブ
+  const job = { id: uid(), label, cancel: () => ac.abort() };
+  genJobs.push(job); updateQueueBadge(); renderQueue();
+  return job;
+}
+function popJob(job) {
+  const i = genJobs.indexOf(job); if (i >= 0) genJobs.splice(i, 1);
+  updateQueueBadge(); renderQueue();
+}
+async function genDescJP(o, prov) {           // 日本語の説明文（desc）を直接生成して即反映する
+  const node = !isArrowObj(o);
+  if (node && !(o.image && media.has(o.image))) return toast('再リンク済みの画像がありません');
+  if (!node && isFree(o)) return toast('ノードにつながっていない矢印には説明文を作れません');
+  if (llmKeyMissing(prov)) return;
+  const ac = new AbortController();
+  const job = pushJob('説明文生成：' + targetLabel(o) + '（' + PROV_LABEL[prov] + '）', ac);
+  try {
+    const base = provBaseOf(prov), model = await provModelOf(prov, base, ac.signal);
+    toast(`説明文を生成中…（${model}）`);
+    const d = node ? await llmDescribeNodeJP(base, model, o, ac.signal) : await llmDescribeArrowJP(base, model, o, ac.signal);
+    if (!d) throw new Error('説明文が空でした');
+    o.desc = d; save(); draw(); updatePanel();
+    toast('説明文を生成しました');
+  } catch (e) { toast(ac.signal.aborted ? '説明文の生成を中止しました' : (e.message || String(e))); }
+  finally { popJob(job); }
+}
+async function genTagsFor(o, prov) {          // ノードは従来のタグ付け、矢印は前後の2枚から生成する
+  if (!isArrowObj(o)) return autoTagLM(o, prov === 'lm' ? undefined : prov);
+  if (isFree(o)) return toast('ノードにつながっていない矢印にはタグを付けられません');
+  const f = nodeById(o.from), t = nodeById(o.to), ok = n => n && n.image && media.has(n.image);
+  if (!ok(f) || !ok(t)) return toast('前後の両方のノードに画像が必要です');
+  if (llmKeyMissing(prov)) return;
+  const ac = new AbortController();
+  const job = pushJob('タグ付け：' + targetLabel(o) + '（' + PROV_LABEL[prov] + '）', ac);
+  try {
+    const base = provBaseOf(prov), model = await provModelOf(prov, base, ac.signal);
+    const [u1, u2] = [await imgDataUrl(f), await imgDataUrl(t)];
+    const ngList = lmList(settings.vocabNg), ngSet = new Set(ngList.map(lmNorm)), max = lmMax();
+    const vocab = lmList(settings.vocab).filter(v => !ngSet.has(lmNorm(v)));
+    const rules = ['この2枚（開始と最終のポーズ）の間をつなぐモーションを表す短い日本語のタグを3〜' + max + '個付けてください。', '・1つのタグは10文字以内の名詞や短い句にする',
+      ...(vocab.length ? ['・次のリストの中からだけ選ぶ：' + vocab.join('、')] : []),
+      ...(ngList.length ? ['・次のタグは使わない：' + ngList.join('、')] : []),
+      '出力は {"tags":["…","…"]} のJSONのみ。'].join('\n');
+    const schema = { type: 'object', properties: { tags: { type: 'array', maxItems: max, items: vocab.length ? { type: 'string', enum: vocab } : { type: 'string' } } }, required: ['tags'] };
+    const sys = 'あなたはモーションにタグを付けるアシスタントです。';
+    let txt;
+    if (prov === 'gemini') txt = await gmCall(model, sys, [{ text: rules }, dataPart(u1), dataPart(u2)], { schema, maxTok: 800 }, ac.signal);
+    else if (prov === 'chatgpt') txt = await oaChat(oaBaseOf(), (settings.oaKey || '').trim(), model, sys, [{ type: 'text', text: rules }, { type: 'image_url', image_url: { url: u1 } }, { type: 'image_url', image_url: { url: u2 } }], { maxTok: 800, schema }, ac.signal);
+    else {
+      const r = await lmFetch(base, '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model, temperature: 0.2, max_tokens: 800, stream: false, response_format: { type: 'json_schema', json_schema: { name: 'tags', strict: true, schema } }, messages: [{ role: 'system', content: sys }, { role: 'user', content: [{ type: 'text', text: rules }, { type: 'image_url', image_url: { url: u1 } }, { type: 'image_url', image_url: { url: u2 } }] }] }) }, 180000, ac.signal);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      txt = lmText(await lmJson(r));
+    }
+    let tags; try { const m = txt.match(/\{[\s\S]*\}/); tags = JSON.parse(m ? m[0] : txt).tags; } catch (_) { tags = txt.split(/[,，、\n]/); }
+    tags = cleanTags((Array.isArray(tags) ? tags : []).map(x => String(x).slice(0, 20))).filter(x => !ngSet.has(lmNorm(x))).slice(0, max);
+    if (tags.length) { addTags([o], tags); updatePanel(); toast('タグを付けました：' + tags.join('、')); }
+    else toast('タグが得られませんでした');
+  } catch (e) { if (!ac.signal.aborted) toast(e.message || String(e)); }
+  finally { popJob(job); }
+}
+async function genBothJP(o, prov) { await genTagsFor(o, prov); await genDescJP(o, prov); }
+
 function tagDelMenu(x, y, targets) {         // 選択範囲に設定されているタグのリスト
   const m = new Map();
   targets.forEach(o => (o.tags || []).forEach(t => m.set(t, (m.get(t) || 0) + 1)));
@@ -1338,11 +1592,11 @@ function copySel(quiet) {
   if (single && !single.video) { toast('動画のない矢印はコピーできません'); return false; }
   const ids = new Set(ns.map(n => n.id));
   const c = { nodes: [], arrows: [] };
-  ns.forEach(n => c.nodes.push({ id: n.id, name: n.name, x: n.x, y: n.y, image: n.image, imageHash: n.imageHash || null, pw: n.pw, ph: n.ph, tags: (n.tags || []).slice() }));
+  ns.forEach(n => c.nodes.push({ id: n.id, name: n.name, x: n.x, y: n.y, image: n.image, imageHash: n.imageHash || null, pw: n.pw, ph: n.ph, tags: (n.tags || []).slice(), desc: n.desc || '' }));
   arrows.forEach(a => {                      // 選択ノード同士をつなぐ矢印は一緒にコピー
-    if (ids.has(a.from) && ids.has(a.to)) c.arrows.push({ from: a.from, to: a.to, ux: null, uy: null, video: a.video, videoHash: a.videoHash || null, vw: a.vw, vh: a.vh, tags: (a.tags || []).slice() });
+    if (ids.has(a.from) && ids.has(a.to)) c.arrows.push({ from: a.from, to: a.to, ux: null, uy: null, video: a.video, videoHash: a.videoHash || null, vw: a.vw, vh: a.vh, tags: (a.tags || []).slice(), desc: a.desc || '' });
   });
-  const freeCopy = (a, x, y) => c.arrows.push({ from: null, to: null, ux: x, uy: y, video: a.video, videoHash: a.videoHash || null, vw: a.vw, vh: a.vh, tags: (a.tags || []).slice() });
+  const freeCopy = (a, x, y) => c.arrows.push({ from: null, to: null, ux: x, uy: y, video: a.video, videoHash: a.videoHash || null, vw: a.vw, vh: a.vh, tags: (a.tags || []).slice(), desc: a.desc || '' });
   fa.forEach(a => freeCopy(a, a.ux, a.uy));
   if (single) { const g = geom(single); freeCopy(single, g.vc.x, g.vc.y); }   // リンク済みの矢印は未リンクの矢印として貼り付け
   const pts = [...c.nodes.map(n => [n.x, n.y]), ...c.arrows.filter(a => !a.from).map(a => [a.ux, a.uy])];
@@ -1480,8 +1734,10 @@ function onLong(g) {
       { label: '🏷 タグを追加', disabled: !tg.length, fn: () => tagAddMenu(g.sx, g.sy, tg) },
       { label: tagging ? '⏹ タグ付けを中止' : `🤖 LM Studioで一括タグ付け（ノード ${imgNs.length} 件）`, disabled: !tagging && !imgNs.length, fn: () => autoTagLM(imgNs) },
       { label: tagging ? '⏹ タグ付けを中止' : `✨ Geminiで一括タグ付け（ノード ${imgNs.length} 件）`, disabled: !tagging && !imgNs.length, fn: () => autoTagLM(imgNs, 'gemini') },
+      { label: tagging ? '⏹ タグ付けを中止' : `✨ ChatGPTで一括タグ付け（ノード ${imgNs.length} 件）`, disabled: !tagging && !imgNs.length, fn: () => autoTagLM(imgNs, 'chatgpt') },
       { label: `📝 LM Studioで一括説明文追加（ノード ${imgNs.length} 件）`, disabled: !imgNs.length, fn: () => descNodesBulk(imgNs) },
       { label: `✨ Geminiで一括説明文追加（ノード ${imgNs.length} 件）`, disabled: !imgNs.length, fn: () => descNodesBulk(imgNs, 'gemini') },
+      { label: `✨ ChatGPTで一括説明文追加（ノード ${imgNs.length} 件）`, disabled: !imgNs.length, fn: () => descNodesBulk(imgNs, 'chatgpt') },
       { label: '🏷 タグを一括削除', disabled: !tg.some(o => o.tags && o.tags.length), fn: () => tagDelMenu(g.sx, g.sy, tg) },
       { label: '📋 コピー (Ctrl+C)', fn: () => copySel() },
       { label: '✂️ 切り取り (Ctrl+X)', fn: cutSel },
@@ -1516,7 +1772,7 @@ function onLong(g) {
       { label: '⏭ 直後の動画の先頭フレームから生成', disabled: !nexts.length, fn: () => genFrame(o, nexts, 'first', g.sx, g.sy) },
       { label: 'ファイル解除', disabled: !o.image, fn: () => { o.image = null; o.imageHash = null; save(); draw(); } },
       { label: '✏️ 名前を変更', fn: () => { const t = prompt('ノード名', o.name); if (t !== null) { o.name = t.trim() || o.name; save(); draw(); } } },
-      { label: '🏷 タグ・説明文を追加', fn: () => tagDescMenu(g.sx, g.sy, o) },
+      { label: '🏷 タグ付け・説明文を生成', fn: () => genMenu(g.sx, g.sy, o) },
       { label: '✂️ 背景を除去', disabled: !(o.image && media.has(o.image)), fn: () => removeBgRun(o) },
       { label: '🔄 反転・回転', disabled: !(o.image && media.has(o.image)), fn: () => flipMenu(g.sx, g.sy, o) },
       ...(o.image && generated.has(o.image) ? [{ label: '💾 静止画を保存（PNG）', fn: () => saveStillPng(o) }] : []),   // 自動生成・反転・回転・背景除去で作った静止画
@@ -1538,7 +1794,10 @@ function onLong(g) {
           save(); draw();
         } },
       ...(isFree(o) ? [{ label: '🖼 前後の静止画ノードを自動生成', disabled: !(o.video && media.has(o.video)), fn: async () => { if (await autoFrames(o)) toast('前後の静止画ノードを生成して接続しました'); } }] : []),
-      { label: '🏷 タグ・説明文を追加', fn: () => tagDescMenu(g.sx, g.sy, o) },
+      { label: '🏷 タグ付け・説明文を生成', fn: () => genMenu(g.sx, g.sy, o) },
+      ...(requests.some(r => r.status === 'pending' && r.targetType === 'arrow' && r.targetId === o.id && r.kind === 'video')
+        ? [{ label: '🎬 FLF2V動画生成の依頼を取り消し', fn: () => { const r = requests.find(r => r.status === 'pending' && r.targetType === 'arrow' && r.targetId === o.id && r.kind === 'video'); if (r) cancelRequest(r.id); } }]
+        : [{ label: '🎬 MuseにFLF2V動画生成を依頼', fn: () => queueFlf2v(o) }]),
       { label: '📋 前後のファイル名と動画プロンプトをコピー', disabled: !arrowPromptText(o), fn: () => copyText(arrowPromptText(o), '前後のファイル名と動画プロンプト') },
       { label: '📋 コピー (Ctrl+C)', disabled: !o.video, fn: () => copySel() },
       { label: '✂️ 切り取り (Ctrl+X)', disabled: !o.video, fn: cutSel },
@@ -1820,6 +2079,10 @@ cv.addEventListener('contextmenu', e => {    // マウスの右クリック：�
   const w = toWorld(e.clientX, e.clientY);
   onLong({ hit: hitTest(w.x, w.y), w, sx: e.clientX, sy: e.clientY });
 });
+document.addEventListener('contextmenu', e => {   // アプリ全体でブラウザ標準の右クリックメニューを抑止（入力欄の中だけ例外。長押しでも出ない）
+  if (e.target.closest && e.target.closest('input,textarea,select,[contenteditable],.dbox')) return;
+  e.preventDefault();
+}, true);
 cv.addEventListener('pointerdown', e => { lastPtrType = e.pointerType; });
 cv.addEventListener('pointermove', e => { lastPt = { x: e.clientX, y: e.clientY }; });
 cv.addEventListener('pointerdown', e => { lastPt = { x: e.clientX, y: e.clientY }; });
@@ -1836,63 +2099,155 @@ function zoomWheel(e) {
 cv.addEventListener('wheel', zoomWheel, { passive: false });
 $('#descLayer').addEventListener('wheel', zoomWheel, { passive: false });   // 説明文のボックスの上でも、ホイール（トラックパッドのピンチを含む）で拡大・縮小できる
 
+/* ---------- メディアの IndexedDB 保存（スタンドアロン版） ---------- */
+/* 画像・動画の実体はプロジェクトJSONには入らないため、ブラウザの IndexedDB に Blob で保存し、
+   再読み込み時に自動で復元する（元のPWAと同じ考え方）。IndexedDB が使えない環境では従来どおり
+   「再リンク」で読み直す。 */
+const IDB_NAME = 'keyframe-map-media', IDB_STORE = 'files';
+function idbOpen() {
+  return new Promise((res, rej) => {
+    const rq = indexedDB.open(IDB_NAME, 1);
+    rq.onupgradeneeded = () => { rq.result.createObjectStore(IDB_STORE); };
+    rq.onsuccess = () => res(rq.result);
+    rq.onerror = () => rej(rq.error);
+  });
+}
+async function idbPut(name, blob) {
+  try {
+    const db = await idbOpen();
+    await new Promise((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(blob, name);
+      tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+    });
+    db.close();
+  } catch (_) {}
+}
+async function idbAll() {
+  const db = await idbOpen();
+  const out = await new Promise((res, rej) => {
+    const rq = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).getAll();
+    rq.onsuccess = () => res(rq.result || []); rq.onerror = () => rej(rq.error);
+  });
+  const keys = await new Promise((res, rej) => {
+    const rq = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).getAllKeys();
+    rq.onsuccess = () => res(rq.result || []); rq.onerror = () => rej(rq.error);
+  });
+  db.close();
+  return out.map((blob, i) => (blob instanceof File ? blob : new File([blob], String(keys[i] || 'media'), { type: blob.type || '' })));
+}
+async function idbClear() {
+  try {
+    const db = await idbOpen();
+    await new Promise((res, rej) => {
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).clear();
+      tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+    });
+    db.close();
+  } catch (_) {}
+}
+async function idbRestore() {
+  try {
+    const files = await idbAll();
+    if (!files.length) return;
+    files.forEach(f => { if (f.name && !media.has(f.name)) registerFile(f); });
+    await Promise.all([...hashJobs.values()]);
+    relinkRefs();
+    draw();
+    toast(`保存済みメディアを復元しました（${files.length} 件）`);
+  } catch (_) {}
+}
+
 /* ---------- JSON保存・読み込み ---------- */
 function serialize() {
+  nodes.forEach(n => { if (typeof n.desc !== 'string') n.desc = ''; });
+  arrows.forEach(a => { if (typeof a.desc !== 'string') a.desc = ''; });
   return {
-    app: 'keyframe-map', version: 1,
+    app: 'keyframe-map', version: 2,
     nodes: nodes.map(n => ({
       id: n.id, name: n.name,
       x: Math.round(n.x * 10) / 10, y: Math.round(n.y * 10) / 10,
-      imageFile: n.image || null,
+      image: n.image || null,
       imageHash: n.image ? (mediaHash.get(n.image) || n.imageHash || null) : null,
-      previewW: n.image ? Math.round(n.pw * 10) / 10 : null,
-      previewH: n.image ? Math.round(n.ph * 10) / 10 : null,
-      ...(n.tags && n.tags.length ? { tags: n.tags.slice() } : {})
+      pw: n.image ? Math.round(n.pw * 10) / 10 : null,
+      ph: n.image ? Math.round(n.ph * 10) / 10 : null,
+      tags: (n.tags || []).slice(),
+      desc: n.desc || ''
     })),
-    arrows: arrows.map(a => {
-      const gm = geom(a), f = nodeById(a.from), t = nodeById(a.to);
-      return {
-        id: a.id, from: a.from == null ? null : a.from, to: a.to == null ? null : a.to,   // 未リンクの矢印は null
-        x: gm ? Math.round(gm.mid.x * 10) / 10 : null,
-        y: gm ? Math.round(gm.mid.y * 10) / 10 : null,
-        angle: f && t ? Math.round(Math.atan2(t.y - f.y, t.x - f.x) * 1800 / Math.PI) / 10 : null,
-        videoFile: a.video || null,
-        videoHash: a.video ? (mediaHash.get(a.video) || a.videoHash || null) : null,
-        previewW: a.video ? Math.round(a.vw * 10) / 10 : null,
-        previewH: a.video ? Math.round(a.vh * 10) / 10 : null,
-        ...(a.tags && a.tags.length ? { tags: a.tags.slice() } : {})
-      };
-    })
+    arrows: arrows.map(a => ({
+      id: a.id, from: a.from == null ? null : a.from, to: a.to == null ? null : a.to,   // 未リンクの矢印は null
+      ux: a.from == null ? Math.round((a.ux || 0) * 10) / 10 : null,
+      uy: a.from == null ? Math.round((a.uy || 0) * 10) / 10 : null,
+      video: a.video || null,
+      videoHash: a.video ? (mediaHash.get(a.video) || a.videoHash || null) : null,
+      vw: a.video ? Math.round(a.vw * 10) / 10 : null,
+      vh: a.video ? Math.round(a.vh * 10) / 10 : null,
+      tags: (a.tags || []).slice(),
+      desc: a.desc || ''
+    })),
+    settings: {   // APIキーは含めない（端末のブラウザにだけ保存する）
+      stillSec: settings.still, still: settings.still, loopMax: settings.loop, loop: settings.loop,
+      tagMax: settings.tagMax,
+      positiveList: lmList(settings.vocab), negativeList: lmList(settings.vocabNg),
+      soundOkList: lmList(settings.soundOk),
+      vocab: settings.vocab, vocabNg: settings.vocabNg, soundOk: settings.soundOk,
+      zoomMin: settings.zoomMin, zoomMax: settings.zoomMax
+    },
+    requests: requests.filter(r => r.status === 'pending').map(r => ({ ...r }))
   };
 }
 function deserialize(o) {
   if (!o || !Array.isArray(o.nodes)) throw new Error('形式が正しくありません');
   vids.forEach(v => v.el.pause());
   nodes = o.nodes.map(n => {
-    const img = n.imageFile || null;
+    const img = n.image || n.imageFile || null;
     return {
       id: String(n.id ?? uid()), name: String(n.name ?? ''), x: +n.x || 0, y: +n.y || 0,
       image: img, imageHash: img ? (n.imageHash || null) : null,
-      pw: img ? (+n.previewW || 160) : null, ph: img ? (+n.previewH || 120) : null,
-      tags: cleanTags(n.tags)
+      pw: img ? (+n.pw || +n.previewW || 160) : null, ph: img ? (+n.ph || +n.previewH || 120) : null,
+      tags: cleanTags(n.tags), desc: typeof n.desc === 'string' ? n.desc : ''
     };
   });
   const ids = new Set(nodes.map(n => n.id));
   arrows = (o.arrows || []).filter(a => {
     const hasF = a.from != null, hasT = a.to != null;
     if (hasF && hasT) return ids.has(String(a.from)) && ids.has(String(a.to));
-    return !hasF && !hasT && !!a.videoFile;  // 未リンクの矢印（動画が必要）
+    return !hasF && !hasT && !!(a.video || a.videoFile);  // 未リンクの矢印（動画が必要）
   }).map(a => {
-    const v = a.videoFile || null, free = a.from == null;
+    const v = a.video || a.videoFile || null, free = a.from == null;
     return {
       id: String(a.id ?? uid()), from: free ? null : String(a.from), to: free ? null : String(a.to),
-      ux: free ? (+a.x || 0) : null, uy: free ? (+a.y || 0) : null,
+      ux: free ? (+(a.ux != null ? a.ux : a.x) || 0) : null, uy: free ? (+(a.uy != null ? a.uy : a.y) || 0) : null,
       video: v, videoHash: v ? (a.videoHash || null) : null,
-      vw: v ? (+a.previewW || 200) : null, vh: v ? (+a.previewH || 113) : null,
-      tags: cleanTags(a.tags)
+      vw: v ? (+a.vw || +a.previewW || 200) : null, vh: v ? (+a.vh || +a.previewH || 113) : null,
+      tags: cleanTags(a.tags), desc: typeof a.desc === 'string' ? a.desc : ''
     };
   });
-  clearSel(); updateConnUI();
+  /* 設定（APIキーは読み込まない＝ファイルに含まれていても除去される） */
+  if (o.settings && typeof o.settings === 'object') {
+    const st = o.settings;
+    if (isFinite(st.stillSec)) settings.still = clamp(+st.stillSec, 0, 60);
+    else if (isFinite(st.still)) settings.still = clamp(+st.still, 0, 60);
+    if (isFinite(st.loopMax)) settings.loop = clamp(Math.round(+st.loopMax), 1, 99);
+    else if (isFinite(st.loop)) settings.loop = clamp(Math.round(+st.loop), 1, 99);
+    if (isFinite(st.tagMax)) settings.tagMax = clamp(Math.round(+st.tagMax), 1, 30);
+    const joinL = v => Array.isArray(v) ? v.map(x => String(x)).join(', ') : (typeof v === 'string' ? v : null);
+    const pv = joinL(st.positiveList != null ? st.positiveList : st.vocab); if (pv != null) settings.vocab = pv;
+    const nv = joinL(st.negativeList != null ? st.negativeList : st.vocabNg); if (nv != null) settings.vocabNg = nv;
+    const sv = joinL(st.soundOkList != null ? st.soundOkList : st.soundOk); if (sv != null) settings.soundOk = sv;
+    if (isFinite(st.zoomMin)) settings.zoomMin = clamp(+st.zoomMin, 0.01, 1);
+    if (isFinite(st.zoomMax)) settings.zoomMax = clamp(+st.zoomMax, 1, 20);
+    saveSettings();
+  }
+  /* Muse への依頼キュー（保留中だけを読み込む。完了済みは持ち込まない） */
+  requests = Array.isArray(o.requests) ? o.requests.filter(r => r && r.status === 'pending').map(r => ({
+    id: String(r.id || uid()), targetType: String(r.targetType || 'node'),
+    targetId: r.targetId != null ? String(r.targetId) : null,
+    kind: String(r.kind || 'tags'), status: 'pending', requestedAt: r.requestedAt || null,
+    ...(r.snapshot ? { snapshot: r.snapshot } : {})
+  })) : [];
+  clearSel(); updateConnUI(); updateQueueBadge();
 }
 function missingMedia() {
   const s = new Set();
@@ -2229,7 +2584,7 @@ async function loadZIP(file) {
 $('#zipPick').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) loadZIP(f); };
 function resetAll() {
   vids.forEach(v => v.el.pause());
-  nodes = []; arrows = []; generated.clear(); clearSel(); updateConnUI(); save(); draw();
+  nodes = []; arrows = []; generated.clear(); requests = []; idbClear(); clearSel(); updateConnUI(); updateQueueBadge(); save(); draw();
 }
 
 /* ---------- 並べ替え ---------- */
@@ -2558,65 +2913,146 @@ async function lmTest() {                    // 設定ダイアログの「接�
     toast(ids.length ? `接続できました（${base}）。モデル：${ids.slice(0, 6).join('、')}${ids.length > 6 ? ' ほか' : ''}` : '接続できましたが、モデルが見つかりません');
   } catch (e) { toast(e.message); }
 }
+/* ---------- OpenAI 互換 API の共通層（Gemini / ChatGPT） ---------- */
+/* Gemini は OpenAI 互換エンドポイント（/v1beta/openai）経由、ChatGPT は OpenAI 公式 API を使う。
+   どちらも LM Studio と同じ {choices:[{message}]} 形式で返るため、呼び出しを共通化する。
+   APIキーは設定（localStorage）にだけ保存し、プロジェクト保存・JSON/ZIP には含めない。 */
+const OA_SRC = 'openai:';
+const PROV_LABEL = { lm: 'LM Studio', gemini: 'Gemini', chatgpt: 'ChatGPT' };
+const gmBaseOf = u => (((u != null ? u : settings.gmUrl) || 'https://generativelanguage.googleapis.com/v1beta/openai') + '').trim().replace(/\/+$/, '');
+const oaBaseOf = u => lmBaseOf(((u != null ? u : settings.oaUrl) || 'https://api.openai.com/v1') + '');
+function provBaseOf(prov) { return prov === 'gemini' ? GM_SRC : prov === 'chatgpt' ? OA_SRC : lmBaseOf(settings.lmUrl); }
+async function provModelOf(prov, base, signal) {
+  return prov === 'gemini' ? gmResolveModel() : prov === 'chatgpt' ? oaResolveModel(signal) : lmModelId(base, signal);
+}
+function llmKeyMissing(prov) {
+  if (prov === 'gemini' && !(settings.gmKey || '').trim()) { toast('設定の Gemini タブで API キーを入力してください'); return true; }
+  if (prov === 'chatgpt' && !(settings.oaKey || '').trim()) { toast('設定の ChatGPT タブで API キーを入力してください'); return true; }
+  return false;
+}
+async function oaFetch(url, key, opt, ms, signal) {   // Bearer 認証つき fetch（タイムアウト・中断対応）
+  const ac = new AbortController(); let to = false;
+  const t = setTimeout(() => { to = true; ac.abort(); }, ms || 120000);
+  const onAb = () => ac.abort();
+  if (signal) signal.addEventListener('abort', onAb, { once: true });
+  try {
+    return await fetch(url, { ...(opt || {}), headers: { ...((opt && opt.headers) || {}), ...(key ? { Authorization: 'Bearer ' + key } : {}) }, signal: ac.signal });
+  } catch (e) {
+    if (to) throw new Error('応答がタイムアウトしました');
+    if (signal && signal.aborted) throw e;
+    const er = new Error('接続できません（ネットワーク・URLを確認してください）'); er.conn = true; throw er;
+  } finally { clearTimeout(t); if (signal) signal.removeEventListener('abort', onAb); }
+}
+async function oaChat(baseUrl, key, model, system, user, opt, signal) {   // OpenAI 互換 chat/completions。応答テキストを返す
+  opt = opt || {};
+  const body = { model, temperature: opt.temp == null ? 0.2 : opt.temp, max_tokens: opt.maxTok || 800, stream: false,
+    messages: [{ role: 'system', content: system }, { role: 'user', content: user }] };
+  if (opt.schema) body.response_format = { type: 'json_schema', json_schema: { name: 'result', strict: true, schema: opt.schema } };
+  const post = () => oaFetch(baseUrl + '/chat/completions', key, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 180000, signal);
+  let r = await post();
+  if (!r.ok && opt.schema && r.status === 400) { delete body.response_format; r = await post(); }   // 構造化出力を受け付けないモデルは素で再試行
+  if (!r.ok) {
+    const er = new Error(`APIがエラーを返しました（HTTP ${r.status}）：${(await r.text()).slice(0, 100)}`);
+    er.status = r.status; if (r.status === 401 || r.status === 403) er.conn = true; throw er;
+  }
+  return lmText(await r.json());
+}
+async function fetchModelIds(prov, signal) {   // GET {url}/models のモデルID一覧（設定ダイアログの入力中値も見る）
+  if (prov === 'gemini') {
+    const key = ($('#setGmKey') && $('#setDlg') && !$('#setDlg').hidden ? $('#setGmKey').value.trim() : '') || (settings.gmKey || '').trim();
+    if (!key) throw gmNoKey();
+    const base = $('#setGmUrl') && !$('#setDlg').hidden ? gmBaseOf($('#setGmUrl').value.trim() || undefined) : gmBaseOf();
+    const r = await oaFetch(base + '/models', key, {}, 15000, signal);
+    if (!r.ok) throw new Error('モデル一覧を取得できません（HTTP ' + r.status + '）');
+    return (((await r.json()).data) || []).map(m => String(m.id || '').replace(/^models\//, '')).filter(Boolean);
+  }
+  if (prov === 'chatgpt') {
+    const key = ($('#setOaKey') && $('#setDlg') && !$('#setDlg').hidden ? $('#setOaKey').value.trim() : '') || (settings.oaKey || '').trim();
+    if (!key) throw new Error('設定の ChatGPT タブで API キーを入力してください');
+    const base = $('#setOaUrl') && !$('#setDlg').hidden ? oaBaseOf($('#setOaUrl').value.trim() || undefined) : oaBaseOf();
+    const r = await oaFetch(base + '/models', key, {}, 15000, signal);
+    if (!r.ok) throw new Error('モデル一覧を取得できません（HTTP ' + r.status + '）');
+    return (((await r.json()).data) || []).map(m => m.id).filter(Boolean);
+  }
+  const base = $('#setLmUrl') && $('#setDlg') && !$('#setDlg').hidden ? lmBaseOf($('#setLmUrl').value) : lmBaseOf(settings.lmUrl);
+  const key = ($('#setLmKey') && !$('#setDlg').hidden ? $('#setLmKey').value.trim() : '') || (settings.lmKey || '').trim();
+  const r = await lmFetch(base, '/models', key ? { headers: { Authorization: 'Bearer ' + key } } : {}, 10000, signal);
+  if (!r.ok) throw new Error('モデル一覧を取得できません（HTTP ' + r.status + '）');
+  return (((await lmJson(r)).data) || []).map(m => m.id).filter(Boolean);
+}
+async function oaResolveModel(signal) {   // ChatGPT：設定のモデルIDがあればそれ、空ならモデル一覧から画像対応モデルを選ぶ
+  if ((settings.oaModel || '').trim()) return settings.oaModel.trim();
+  const ids = await fetchModelIds('chatgpt', signal);
+  if (!ids.length) throw new Error('ChatGPTのモデルが見つかりません（設定でモデルIDを入力してください）');
+  return ids.find(id => /gpt-4o|gpt-4\.1|gpt-5/i.test(id)) || ids[0];
+}
+function fillModelSel(prov, ids) {
+  const sel = prov === 'lm' ? $('#setLmModelSel') : prov === 'gemini' ? $('#setGmModelSel') : $('#setOaModelSel');
+  const wrap = prov === 'lm' ? $('#lmModelSelWrap') : prov === 'gemini' ? $('#gmModelSelWrap') : $('#oaModelSelWrap');
+  if (!sel) return;
+  sel.innerHTML = '';
+  const ph = document.createElement('option'); ph.value = ''; ph.textContent = '-- モデルを選択 --'; sel.appendChild(ph);
+  ids.forEach(id => { const o = document.createElement('option'); o.value = o.textContent = id; sel.appendChild(o); });
+  if (wrap) wrap.hidden = !ids.length;
+}
+async function llmTest(prov) {   // 接続テスト＋モデル一覧取得（結果・応答時間・モデルIDの有無を表示する）
+  const t0 = performance.now();
+  toast('接続を確認中…');
+  try {
+    const ids = await fetchModelIds(prov);
+    let model = '';
+    if (prov === 'lm') {
+      fillList('#lmModelList', ids.filter(id => !/embed/i.test(id)));
+      fillList('#lmEmbList', ids.filter(id => /embed|bge|e5|gte|minilm/i.test(id)));
+      model = $('#setLmModel').value.trim();
+    } else if (prov === 'gemini') {
+      fillList('#gmModelList', ids.slice().sort((a, b) => (/^gemini-\d/.test(b) - /^gemini-\d/.test(a)) || a.localeCompare(b)));
+      model = $('#setGmModel').value.trim() || GM_DEFAULT;
+    } else {
+      fillList('#oaModelList', ids);
+      model = $('#setOaModel').value.trim();
+    }
+    fillModelSel(prov, ids);
+    const ms = Math.round(performance.now() - t0);
+    if (!ids.length) return toast(`接続できましたが、モデルが見つかりません（${ms}ms）`);
+    toast(`接続できました（${ms}ms）。モデル ${ids.length} 件` + (model ? (ids.includes(model) ? `、モデルID「${model}」あり` : `、モデルID「${model}」は一覧にありません（一覧から選べます）`) : ''));
+  } catch (e) { toast('接続できません：' + String((e && e.message) || e).slice(0, 140)); }
+}
+
 /* ---------- Gemini API（APIキーで、タグ付け・説明文の生成を行う） ---------- */
 /* LM Studio と同じ関数を使い回すため、base に GM_SRC を渡したときは Gemini へ送る */
 const GM_SRC = 'gemini:', GM_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 let gmSchemaOK = true;
+let oaSchemaOK = true;
 const gmNoKey = () => new Error('設定の Gemini タブで API キーを入力してください');
-async function gmListModels(signal, key) {   // generateContent に対応するモデルの名前（models/ なし）の一覧
+async function gmListModels(signal, key) {   // OpenAI 互換 /models のモデルID一覧（models/ なし）
   key = key || (settings.gmKey || '').trim();
   if (!key) throw gmNoKey();
-  const out = []; let tok = '';
-  for (let i = 0; i < 5; i++) {
-    let r;
-    try { r = await fetch(GM_BASE + '/models?pageSize=100' + (tok ? '&pageToken=' + encodeURIComponent(tok) : ''), { headers: { 'x-goog-api-key': key }, signal }); }
-    catch (e) { if (signal && signal.aborted) throw e; const er = new Error('Geminiに接続できません（ネットワークを確認してください）'); er.conn = true; throw er; }
-    const j = await r.json().catch(() => null);
-    if (!r.ok) { const er = new Error((j && j.error && j.error.message) || ('HTTP ' + r.status)); if (r.status === 401 || r.status === 403 || r.status === 400) er.conn = true; throw er; }
-    (j.models || []).forEach(m => { if (!m.supportedGenerationMethods || m.supportedGenerationMethods.includes('generateContent')) out.push(String(m.name).replace(/^models\//, '')); });
-    tok = j.nextPageToken; if (!tok) break;
-  }
-  return out;
+  const r = await oaFetch(gmBaseOf() + '/models', key, {}, 15000, signal);
+  if (!r.ok) { const er = new Error('モデル一覧を取得できません（HTTP ' + r.status + '）'); if (r.status === 401 || r.status === 403 || r.status === 400) er.conn = true; throw er; }
+  return (((await r.json()).data) || []).map(m => String(m.id || '').replace(/^models\//, '')).filter(Boolean);
 }
 const GM_DEFAULT = 'gemini-3.1-flash-lite';   // 既定のモデル（動作確認済み）。設定のモデルIDが空のときに使う
 async function gmResolveModel() {            // 設定のモデルIDがあればそれ、空なら既定のモデル
   return (settings.gmModel || '').trim().replace(/^models\//, '') || GM_DEFAULT;
 }
 const dataPart = url => ({ inline_data: { mime_type: 'image/jpeg', data: url.slice(url.indexOf(',') + 1) } });
-async function gmCall(model, system, parts, opt, signal) {
+async function gmCall(model, system, parts, opt, signal) {   // Gemini を OpenAI 互換 API 経由で呼ぶ（parts は従来形式）
   const key = (settings.gmKey || '').trim();
   if (!key) throw gmNoKey();
   model = String(model).replace(/^models\//, '');
-  const gc = { temperature: opt.temp == null ? 0.2 : opt.temp, maxOutputTokens: opt.maxTok || 4096 };   // 思考に使われる分も見込んで多めにする
-  if (opt.schema) { gc.responseMimeType = 'application/json'; gc.responseSchema = opt.schema; }
-  const body = { systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts }], generationConfig: gc };
-  const ac = new AbortController(); let to = false;
-  const t = setTimeout(() => { to = true; ac.abort(); }, 120000), onAb = () => ac.abort();
-  if (signal) signal.addEventListener('abort', onAb, { once: true });
-  let r;
-  try {
-    r = await fetch(GM_BASE + '/models/' + encodeURIComponent(model) + ':generateContent', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: JSON.stringify(body), signal: ac.signal });
-  } catch (e) {
-    if (to) throw new Error('Geminiの応答がタイムアウトしました');
-    if (signal && signal.aborted) throw e;
-    const er = new Error('Geminiに接続できません（ネットワークを確認してください）'); er.conn = true; throw er;
-  } finally { clearTimeout(t); if (signal) signal.removeEventListener('abort', onAb); }
-  let j = null; try { j = await r.json(); } catch (_) {}
-  if (!r.ok) {
-    const msg = (j && j.error && j.error.message) || ('HTTP ' + r.status);
-    let hint = '';
-    if (r.status === 404) {                  // モデルが見つからない・廃止された：利用できるモデルを案内する
-      try { const nm = (await gmListModels(signal)).filter(n => /^gemini-\d/.test(n)); if (nm.length) hint = '　利用できるモデル：' + nm.slice(0, 12).join('、') + '（設定の Gemini タブでモデルIDを変更してください。空にすると既定の ' + GM_DEFAULT + ' を使います）'; } catch (_) {}
+  const user = parts.map(p => p.text != null ? { type: 'text', text: p.text }
+    : { type: 'image_url', image_url: { url: 'data:' + ((p.inline_data && p.inline_data.mime_type) || 'image/jpeg') + ';base64,' + (p.inline_data ? p.inline_data.data : '') } });
+  let t;
+  try { t = await oaChat(gmBaseOf(), key, model, system, user, opt, signal); }
+  catch (e) {
+    if (e.status === 404) {                  // モデルが見つからない・廃止された：利用できるモデルを案内する
+      try { const nm = (await gmListModels(signal)).filter(n => /^gemini-\d/.test(n)); if (nm.length) e.message += '　利用できるモデル：' + nm.slice(0, 12).join('、') + '（設定の Gemini タブでモデルIDを変更してください。空にすると既定の ' + GM_DEFAULT + ' を使います）'; } catch (_) {}
     }
-    const er = new Error(`Geminiがエラーを返しました（${r.status}）：${String(msg).slice(0, 120)}${hint}`);
-    er.status = r.status; if (r.status === 401 || r.status === 403 || /API key/i.test(msg)) er.conn = true;   // キーの誤りなどは、残りも試さない
-    throw er;
+    throw e;
   }
-  const c = j && j.candidates && j.candidates[0];
-  const txt = ((c && c.content && c.content.parts) || []).map(p => p.text || '').join('').trim();
-  if (!txt) throw new Error('Geminiの応答が空でした（' + ((j && j.promptFeedback && j.promptFeedback.blockReason) || (c && c.finishReason) || '理由不明') + '）');
-  return txt;
+  if (!t || !t.trim()) throw new Error('Geminiの応答が空でした');
+  return t;
 }
 async function gmTest() {                    // 設定ダイアログの「接続テスト」（入力中のキー・モデルで確認し、使えるモデルを案内する）
   const key = $('#setGmKey').value.trim(), want = $('#setGmModel').value.trim().replace(/^models\//, '');
@@ -2631,7 +3067,7 @@ async function gmTest() {                    // 設定ダイアログの「接�
 }
 const lmList = s => cleanTags((s || '').split(/[,，、\n]/));
 const lmNorm = t => String(t).normalize('NFKC').toLowerCase();   // 全角・半角、大文字・小文字を区別しない
-const lmMax = () => clamp(Math.round(+settings.tagMax) || 8, 1, 20);
+const lmMax = () => clamp(Math.round(+settings.tagMax) || 8, 1, 30);
 const lmText = j => {                       // content が空で reasoning_content に結果が入るモデルにも対応
   const m = (j && j.choices && j.choices[0] && j.choices[0].message) || {};
   const t = (m.content || '').trim() ? m.content : (m.reasoning_content || m.reasoning || '');
@@ -2658,11 +3094,15 @@ async function lmTagOne(base, model, n, signal, vocab, existing) {
   rules.push('出力は {"tags":["…","…"]} のJSONのみ。');
   const schema = { type: 'object', properties: { tags: { type: 'array', maxItems: max, items: vocab.length ? { type: 'string', enum: vocab } : { type: 'string' } } }, required: ['tags'] };
   let txt;
-  if (base === GM_SRC) {                      // Gemini
-    const gs = { type: 'OBJECT', properties: { tags: { type: 'ARRAY', maxItems: max, items: vocab.length ? { type: 'STRING', enum: vocab } : { type: 'STRING' } } }, required: ['tags'] };
+  if (base === GM_SRC) {                      // Gemini（OpenAI互換API）
     const parts = [{ text: rules.join('\n') }, dataPart(url)], sys = 'あなたはキャラクターのキーフレーム画像にタグを付けるアシスタントです。';
-    try { txt = await gmCall(model, sys, parts, { schema: gmSchemaOK ? gs : null, maxTok: 4096 }, signal); }
+    try { txt = await gmCall(model, sys, parts, { schema: gmSchemaOK ? schema : null, maxTok: 4096 }, signal); }
     catch (e) { if (e.status === 400 && gmSchemaOK) { gmSchemaOK = false; txt = await gmCall(model, sys, parts, { maxTok: 4096 }, signal); } else throw e; }
+  } else if (base === OA_SRC) {               // ChatGPT（OpenAI）
+    const sys = 'あなたはキャラクターのキーフレーム画像にタグを付けるアシスタントです。';
+    const user = [{ type: 'text', text: rules.join('\n') }, { type: 'image_url', image_url: { url } }];
+    try { txt = await oaChat(oaBaseOf(), (settings.oaKey || '').trim(), model, sys, user, { temp: 0.2, maxTok: 800, schema: oaSchemaOK ? schema : null }, signal); }
+    catch (e) { if (e.status === 400 && oaSchemaOK) { oaSchemaOK = false; txt = await oaChat(oaBaseOf(), (settings.oaKey || '').trim(), model, sys, user, { temp: 0.2, maxTok: 800 }, signal); } else throw e; }
   } else {
   const post = async (withSchema, withPrefill) => {
     const body = { model, temperature: 0.2, max_tokens: 800, stream: false,
@@ -2815,9 +3255,14 @@ function descPrompt() {
   ].join('\n');
 }
 async function lmChatText(base, model, system, user, signal, maxTok) {   // テキストを返すチャット呼び出し（思考なし指定の自動切替つき）
-  if (base === GM_SRC) {                      // Gemini
+  if (base === GM_SRC) {                      // Gemini（OpenAI互換API）
     const parts = typeof user === 'string' ? [{ text: user }] : user.map(q => q.type === 'text' ? { text: q.text } : dataPart(q.image_url.url));
     const t = await gmCall(model, system, parts, { temp: 0, maxTok: 4096 }, signal);
+    return t.replace(/[*#`]/g, '').replace(/\n{2,}/g, '\n').slice(0, 1200);
+  }
+  if (base === OA_SRC) {                      // ChatGPT（OpenAI）
+    const t = await oaChat(oaBaseOf(), (settings.oaKey || '').trim(), model, system, user, { temp: 0, maxTok: maxTok || 400 }, signal);
+    if (!t.trim()) throw new Error('説明文が空でした');
     return t.replace(/[*#`]/g, '').replace(/\n{2,}/g, '\n').slice(0, 1200);
   }
   const post = pre => {
@@ -3044,7 +3489,7 @@ let lmBusy = false;
 const lmQ = []; let lmQRun = false;
 function lmEnqueue(key, label, fn) {
   if (lmQ.some(q => q.key === key)) return toast('すでに処理待ちです：' + label);
-  lmQ.push({ key, label, fn });
+  lmQ.push({ key, label, fn }); updateQueueBadge(); renderQueue();
   if (lmQRun || lmBusy || tagging) toast(`処理待ちに追加しました：${label}（待ち ${lmQ.length} 件）`);
   lmPump();
 }
@@ -3053,16 +3498,18 @@ async function lmPump() {
   try {
     while (lmQ.length) {
       while (lmBusy || tagging) await new Promise(r => setTimeout(r, 400));   // タグ付け・ソート・ほかの説明文の生成が終わるまで待つ
-      const q = lmQ.shift();
+      const q = lmQ.shift(); updateQueueBadge(); renderQueue();
       try { await q.fn(); } catch (e) { toast((e && e.message) || String(e)); }
+      updateQueueBadge(); renderQueue();
     }
   } finally { lmQRun = false; }
 }
 const descNodeLM = (n, prov) => lmEnqueue('n' + n.id + (prov || ''), 'ノード「' + (n.name || n.image) + '」の説明文', () => descNodeRun(n, prov));
 function descNodesBulk(list, prov) {               // 複数選択：選択中のノードの説明文を順番待ちに入れて、順に生成する
-  const gm = prov === 'gemini';
-  if (gm && !(settings.gmKey || '').trim()) return toast('設定の Gemini タブで API キーを入力してください');
-  if (!confirm(`${list.length} 件の画像を ${gm ? 'Google の Gemini API' : lmBaseOf(settings.lmUrl)} に送って説明文を追加します。よろしいですか？`)) return;
+  prov = prov || 'lm';
+  if (llmKeyMissing(prov)) return;
+  const dest = prov === 'gemini' ? 'Google の Gemini API' : prov === 'chatgpt' ? 'OpenAI の ChatGPT API' : lmBaseOf(settings.lmUrl);
+  if (!confirm(`${list.length} 件の画像を ${dest} に送って説明文を追加します。よろしいですか？`)) return;
   list.forEach(n => descNodeLM(n, prov));
 }
 const descArrowLM = (a, prov) => lmEnqueue('a' + a.id + (prov || ''), '矢印の説明文', () => descArrowRun(a, prov));
@@ -3071,7 +3518,7 @@ async function descNodeRun(n, prov) {                // ノード：LM Studio �
   lmBusy = true; descLoad();
   try {
     if (hashJobs.size) await Promise.all([...hashJobs.values()]);
-    const gm = prov === 'gemini', base = gm ? GM_SRC : lmBaseOf(settings.lmUrl), model = gm ? await gmResolveModel() : await lmModelId(base);
+    const base = provBaseOf(prov || 'lm'), model = await provModelOf(prov || 'lm', base);
     toast(`説明文を生成中…（${model}）`);
     const d = await lmDescribe(base, model, n);
     descPut(descKeyOf(model, n), embKey(n), d); descSave();
@@ -3084,7 +3531,7 @@ async function descArrowRun(a, prov) {               // 矢印：前後のノー
   lmBusy = true; descLoad();
   try {
     if (hashJobs.size) await Promise.all([...hashJobs.values()]);
-    const gm = prov === 'gemini', base = gm ? GM_SRC : lmBaseOf(settings.lmUrl), model = gm ? await gmResolveModel() : await lmModelId(base);
+    const base = provBaseOf(prov || 'lm'), model = await provModelOf(prov || 'lm', base);
     const get = async n => {                 // 説明文がなければ先にノードの説明文を生成する
       let d = descCache.get(descKeyOf(model, n)) || descIdx.get(embKey(n));
       if (!d) { toast(`ノード「${n.name}」の説明文を生成中…`); d = await lmDescribe(base, model, n); descPut(descKeyOf(model, n), embKey(n), d); }
@@ -3106,14 +3553,15 @@ async function autoTagLM(only, prov) {
   const picked = !!only || sel.nodes.length > 0;
   if (!picked) list = nodes.filter(n => n.image && media.has(n.image) && !(n.tags && n.tags.length));
   if (!list.length) return toast(picked ? '選択したノードに、再リンク済みの画像がありません' : 'タグのない画像ノードがありません（ノードを選択すると、選択分にタグを追加します）');
-  const gm = prov === 'gemini', base = gm ? GM_SRC : lmBaseOf(settings.lmUrl);
-  if (gm && !(settings.gmKey || '').trim()) return toast('設定の Gemini タブで API キーを入力してください');
-  if (!confirm(`${list.length} 件の画像を ${gm ? 'Google の Gemini API' : base} に送ってタグ付けします。よろしいですか？`)) return;
-  const ac = new AbortController(); tagging = ac;
+  const base = provBaseOf(prov || 'lm');
+  if (llmKeyMissing(prov || 'lm')) return;
+  const dest = prov === 'gemini' ? 'Google の Gemini API' : prov === 'chatgpt' ? 'OpenAI の ChatGPT API' : base;
+  if (!confirm(`${list.length} 件の画像を ${dest} に送ってタグ付けします。よろしいですか？`)) return;
+  const ac = new AbortController(); tagging = ac; updateQueueBadge(); renderQueue();
   const vocab = lmList(settings.vocab);
   let ok = 0, fail = 0, firstErr = '';
   try {
-    const model = gm ? await gmResolveModel() : await lmModelId(base, ac.signal);
+    const model = await provModelOf(prov || 'lm', base, ac.signal);
     for (let i = 0; i < list.length && !ac.signal.aborted; i++) {
       toast(`タグ付け中… ${i + 1}/${list.length}（${model}）`);
       try {
@@ -3127,7 +3575,7 @@ async function autoTagLM(only, prov) {
     }
   } catch (e) { if (!ac.signal.aborted) firstErr = e.message; }
   const aborted = ac.signal.aborted;
-  tagging = null;
+  tagging = null; updateQueueBadge(); renderQueue();
   save(); draw();
   toast(`タグ付け${aborted ? 'を中止しました' : '完了'}：成功 ${ok} 件` + (fail ? `、失敗 ${fail} 件` : '') + (firstErr ? `（${firstErr}）` : ''));
 }
@@ -3432,19 +3880,20 @@ $('#fsBtn').onclick = async () => {
 const player = $('#player'), pImg = $('#pImg'), pVid = $('#pVid'), pCap = $('#pCap');
 /* 設定（端末のブラウザに保存） */
 const SET_KEY = 'keyframe-map.settings.v1';
-const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true, upscaled: true, bgThr: 50, bgColor: 'transparent', bgCustom: '#ff00ff', bgModel: '', gmKey: '', gmModel: '', zoomMin: 0.15, zoomMax: 5, soundOk: '吐息, 溜息, 舌打ち, 咀嚼音' };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
+const settings = { still: 1.5, loop: 5, lmUrl: 'http://localhost:1234/v1', lmModel: '', lmEmb: '', vocab: '', vocabNg: '', tagMax: 8, noThink: true, upscaled: true, bgThr: 50, bgColor: 'transparent', bgCustom: '#ff00ff', bgModel: '', gmKey: '', gmModel: '', gmUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', lmKey: '', oaUrl: 'https://api.openai.com/v1', oaKey: '', oaModel: '', llmUse: 'lm', zoomMin: 0.05, zoomMax: 8, soundOk: '吐息, 溜息, 舌打ち, 咀嚼音' };   // still＝静止画の表示秒数／loop＝同じ箇所の最大ループ回数
 try {
   const o = JSON.parse(localStorage.getItem(SET_KEY) || '{}');
   if (isFinite(o.still) && o.still >= 0) settings.still = clamp(+o.still, 0, 60);
   if (isFinite(o.loop) && o.loop >= 1) settings.loop = clamp(Math.round(+o.loop), 1, 99);
-  for (const k of ['lmUrl', 'lmModel', 'lmEmb', 'vocab', 'vocabNg', 'soundOk', 'bgColor', 'bgCustom', 'bgModel', 'gmKey', 'gmModel']) if (typeof o[k] === 'string') settings[k] = o[k];
+  for (const k of ['lmUrl', 'lmModel', 'lmEmb', 'vocab', 'vocabNg', 'soundOk', 'bgColor', 'bgCustom', 'bgModel', 'gmKey', 'gmModel', 'gmUrl', 'lmKey', 'oaUrl', 'oaKey', 'oaModel', 'llmUse']) if (typeof o[k] === 'string') settings[k] = o[k];
   if (typeof o.noThink === 'boolean') settings.noThink = o.noThink;
   if (typeof o.upscaled === 'boolean') settings.upscaled = o.upscaled;
   if (isFinite(o.zoomMin) && o.zoomMin > 0) settings.zoomMin = clamp(+o.zoomMin, 0.01, 1);
   if (isFinite(o.zoomMax) && o.zoomMax > 0) settings.zoomMax = clamp(+o.zoomMax, 1, 20);
   if (isFinite(o.bgThr)) settings.bgThr = clamp(Math.round(+o.bgThr), 0, 100);
-  if (isFinite(o.tagMax) && o.tagMax >= 1) settings.tagMax = clamp(Math.round(+o.tagMax), 1, 20);
+  if (isFinite(o.tagMax) && o.tagMax >= 1) settings.tagMax = clamp(Math.round(+o.tagMax), 1, 30);
 } catch (_) {}
+function saveSettings() { try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (_) {} }
 $('#setBtn').onclick = () => {
   closePopups();
   $('#setStill').value = settings.still; $('#setLoop').value = settings.loop;
@@ -3452,6 +3901,9 @@ $('#setBtn').onclick = () => {
   $('#setLmUrl').value = settings.lmUrl; $('#setLmModel').value = settings.lmModel; $('#setLmEmb').value = settings.lmEmb; $('#setVocab').value = settings.vocab; $('#setNoThink').checked = settings.noThink; $('#setUpscaled').checked = settings.upscaled;
   $('#setVocabNg').value = settings.vocabNg; $('#setTagMax').value = settings.tagMax;
   $('#setSoundOk').value = settings.soundOk; $('#setBgThr').value = settings.bgThr; $('#setBgColor').value = settings.bgColor; $('#setBgCustom').value = settings.bgCustom; $('#setBgModel').value = settings.bgModel; syncBgUI();
+  $('#setLmKey').value = settings.lmKey; $('#setGmUrl').value = settings.gmUrl;
+  $('#setOaUrl').value = settings.oaUrl; $('#setOaKey').value = settings.oaKey; $('#setOaModel').value = settings.oaModel;
+  document.querySelectorAll('input[name="llmUse"]').forEach(r => { r.checked = r.value === settings.llmUse; });
   $('#setDlg').hidden = false;
 };
 document.querySelectorAll('#setTabs button').forEach(b => { b.onclick = () => {       // 設定のタブの切り替え
@@ -3459,8 +3911,15 @@ document.querySelectorAll('#setTabs button').forEach(b => { b.onclick = () => { 
   document.querySelectorAll('#setDlg .tabp').forEach(x => { x.hidden = x.dataset.tab !== b.dataset.tab; });
 }; });
 $('#setCancel').onclick = () => { $('#setDlg').hidden = true; };
-$('#setLmTest').onclick = lmTest;
-$('#setGmTest').onclick = gmTest;
+$('#setLmTest').onclick = () => llmTest('lm');
+$('#setLmModels').onclick = () => llmTest('lm');
+$('#setGmTest').onclick = () => llmTest('gemini');
+$('#setGmModels').onclick = () => llmTest('gemini');
+$('#setOaTest').onclick = () => llmTest('chatgpt');
+$('#setOaModels').onclick = () => llmTest('chatgpt');
+$('#setLmModelSel').onchange = e => { if (e.target.value) $('#setLmModel').value = e.target.value; };
+$('#setGmModelSel').onchange = e => { if (e.target.value) $('#setGmModel').value = e.target.value; };
+$('#setOaModelSel').onchange = e => { if (e.target.value) $('#setOaModel').value = e.target.value; };
 function syncBgUI() { $('#setBgThrV').textContent = $('#setBgThr').value; $('#setBgCustomRow').hidden = $('#setBgColor').value !== 'custom'; }
 $('#setBgThr').oninput = $('#setBgColor').onchange = syncBgUI;
 $('#setOk').onclick = () => {
@@ -3468,12 +3927,17 @@ $('#setOk').onclick = () => {
   settings.still = isFinite(st) && st >= 0 ? clamp(Math.round(st * 10) / 10, 0, 60) : settings.still;
   settings.loop = isFinite(lp) && lp >= 1 ? clamp(lp, 1, 99) : settings.loop;
   settings.lmUrl = lmBaseOf($('#setLmUrl').value); settings.lmModel = $('#setLmModel').value.trim(); settings.lmEmb = $('#setLmEmb').value.trim(); settings.vocab = $('#setVocab').value.trim();
-  settings.vocabNg = $('#setVocabNg').value.trim(); settings.tagMax = clamp(parseInt($('#setTagMax').value, 10) || 8, 1, 20);
+  { const tm = parseInt($('#setTagMax').value, 10); settings.vocabNg = $('#setVocabNg').value.trim(); settings.tagMax = isFinite(tm) ? clamp(tm, 1, 30) : 8; }
   settings.upscaled = $('#setUpscaled').checked; settings.soundOk = $('#setSoundOk').value.trim(); settings.bgThr = clamp(parseInt($('#setBgThr').value, 10) || 0, 0, 100); settings.bgColor = $('#setBgColor').value; settings.bgCustom = $('#setBgCustom').value; settings.bgModel = $('#setBgModel').value.trim();
   { const zl = parseFloat($('#setZoomMin').value), zh = parseFloat($('#setZoomMax').value);
     settings.zoomMin = isFinite(zl) && zl > 0 ? clamp(zl, 0.01, 1) : settings.zoomMin;
     settings.zoomMax = isFinite(zh) && zh > 0 ? clamp(zh, 1, 20) : settings.zoomMax; }
   settings.gmKey = $('#setGmKey').value.trim(); settings.gmModel = $('#setGmModel').value.trim().replace(/^models\//, ''); gmSchemaOK = true;
+  settings.lmKey = $('#setLmKey').value.trim();
+  settings.gmUrl = $('#setGmUrl').value.trim().replace(/\/+$/, '') || 'https://generativelanguage.googleapis.com/v1beta/openai';
+  settings.oaUrl = $('#setOaUrl').value.trim() || 'https://api.openai.com/v1'; settings.oaKey = $('#setOaKey').value.trim(); settings.oaModel = $('#setOaModel').value.trim();
+  { const useR = document.querySelector('input[name="llmUse"]:checked'); if (useR) settings.llmUse = useR.value; }
+  oaSchemaOK = true;
   settings.noThink = $('#setNoThink').checked; lmPrefillOK = lmSchemaOK = true;   // 設定を変えたら対応状況の判定をやり直す
   try { localStorage.setItem(SET_KEY, JSON.stringify(settings)); } catch (_) {}
   $('#setDlg').hidden = true; toast('設定を保存しました');
@@ -3694,6 +4158,139 @@ document.addEventListener('keydown', e => {
   e.preventDefault(); closePopups(); deleteSelection();
 });
 
+/* ---------- Muse への依頼キュー・キューパネル・選択パネル（スタンドアロン版） ---------- */
+/* 依頼はプロジェクトの requests 配列として保存される。スタンドアロン版に Muse の処理側は無いため、
+   依頼はキューに溜まり、Muse アプリ（Space版）とプロジェクトデータを共有したときに処理される。 */
+let requests = [];                            // Muse への依頼（保留中のみ保持）
+const genJobs = [];                           // 進行中の直接生成（説明文・矢印タグ・LLM類似度ソート）
+function updateQueueBadge() {
+  const b = $('#queueBadge'); if (!b) return;
+  const n = requests.filter(r => r.status === 'pending').length + genJobs.length + (tagging ? 1 : 0) + lmQ.length;
+  b.hidden = !n; b.textContent = n || '';
+}
+function addRequest(tt, id, kind, snapshot) {
+  if (tt !== 'project' && requests.some(r => r.status === 'pending' && r.targetType === tt && r.targetId === id && r.kind === kind)) { toast('すでに依頼中です'); return null; }
+  if (kind === 'sort' && requests.some(r => r.status === 'pending' && r.kind === 'sort')) { toast('すでに類似度ソートを依頼中です'); return null; }
+  const r = { id: uid(), targetType: tt, targetId: id, kind, status: 'pending', requestedAt: new Date().toISOString(), ...(snapshot ? { snapshot } : {}) };
+  requests.push(r); save(); updateQueueBadge(); renderQueue(); draw();
+  toast('Muse への依頼をキューに入れました（Space版とプロジェクトデータを共有したときに処理されます）');
+  return r;
+}
+function cancelRequest(id) {
+  requests = requests.filter(r => r.id !== id);
+  save(); updateQueueBadge(); renderQueue(); draw(); updatePanel();
+  toast('Muse への依頼を取り消しました');
+}
+function reqTargetName(r) {
+  if (r.kind === 'sort' || r.targetType === 'project') return 'マップ全体';
+  const o = r.targetType === 'node' ? nodeById(r.targetId) : arrowById(r.targetId);
+  return o ? targetLabel(o) : '（対象がありません）';
+}
+function renderQueue() {                      // 📋キューパネルの中身（進行中の生成・ソート・Muse 依頼）
+  const list = $('#queueList'); if (!list) return;
+  const rows = [];
+  if (tagging) rows.push({ label: 'タグ付け（実行中）', btn: 'キャンセル', fn: () => { tagging.abort(); } });
+  lmQ.forEach(q => rows.push({ label: '説明文（英語・プロンプト用）の処理待ち：' + q.label, btn: 'キャンセル', fn: () => { const i = lmQ.indexOf(q); if (i >= 0) lmQ.splice(i, 1); updateQueueBadge(); renderQueue(); } }));
+  genJobs.forEach(j => rows.push({ label: j.label + (j.prog ? '（' + j.prog + '）' : '（実行中）'), btn: 'キャンセル', fn: () => j.cancel() }));
+  if (arranging && !genJobs.some(j => j.sortJob)) rows.push({ label: '並べ替え（ローカル計算）実行中', btn: null });
+  requests.filter(r => r.status === 'pending').forEach(r => rows.push({ label: '🤖 Muse 依頼：' + reqKindLabel(r.kind) + '（' + reqTargetName(r) + '）', btn: '取り消し', fn: () => cancelRequest(r.id) }));
+  list.innerHTML = '';
+  if (!rows.length) { const d = document.createElement('div'); d.className = 'qpEmpty'; d.textContent = '進行中の処理・依頼はありません'; list.appendChild(d); }
+  rows.forEach(rw => {
+    const d = document.createElement('div'); d.className = 'qpRow';
+    const sp = document.createElement('span'); sp.textContent = rw.label; d.appendChild(sp);
+    if (rw.btn) { const b = document.createElement('button'); b.type = 'button'; b.textContent = rw.btn; b.onclick = rw.fn; d.appendChild(b); }
+    list.appendChild(d);
+  });
+  updateQueueBadge();
+}
+$('#queueBtn').onclick = () => { const p = $('#queuePanel'); p.hidden = !p.hidden; if (!p.hidden) renderQueue(); };
+$('#queueClose').onclick = () => { $('#queuePanel').hidden = true; };
+setInterval(() => { const p = $('#queuePanel'); if (p && !p.hidden) renderQueue(); }, 1000);
+
+/* 選択パネル：ノード／矢印を1つ選んだとき、キャンバス下部にその説明文・タグ・依頼状況を表示する */
+let panelObj = null, panelHiddenFor = '';
+function panelTarget() {
+  if (sel.arrow) { const a = arrowById(sel.arrow); if (a) return { o: a, tt: 'arrow' }; }
+  if (sel.nodes.length === 1) { const n = nodeById(sel.nodes[0]); if (n) return { o: n, tt: 'node' }; }
+  return null;
+}
+function updatePanel() {
+  const p = $('#selPanel'); if (!p) return;
+  const t = panelTarget();
+  if (!t) { p.hidden = true; panelObj = null; return; }
+  const key = t.tt + ':' + t.o.id;
+  if (panelHiddenFor && panelHiddenFor !== key) panelHiddenFor = '';
+  if (panelHiddenFor === key) { p.hidden = true; panelObj = null; return; }
+  panelObj = t;
+  const o = t.o;
+  $('#spTitle').textContent = t.tt === 'node' ? '🖼 ' + (o.name || o.image || 'ノード')
+    : '➡ ' + ((nodeById(o.from) || {}).name || '?') + ' → ' + ((nodeById(o.to) || {}).name || '?') + (o.video ? '（' + o.video + '）' : '');
+  $('#spTags').textContent = (o.tags && o.tags.length) ? '🏷 ' + o.tags.join('、') : '🏷 タグなし';
+  $('#spDesc').textContent = o.desc ? o.desc : '（説明文はまだありません）';
+  const pend = requests.filter(r => r.status === 'pending' && r.targetType === t.tt && r.targetId === o.id);
+  $('#spReq').textContent = pend.length ? '🤖 依頼中：' + pend.map(r => reqKindLabel(r.kind)).join('、') : '';
+  $('#spQuick').textContent = '✨ ' + PROV_LABEL[settings.llmUse] + 'でタグ＋説明文';
+  p.hidden = false;
+}
+$('#spClose').onclick = () => { if (panelObj) panelHiddenFor = panelObj.tt + ':' + panelObj.o.id; $('#selPanel').hidden = true; panelObj = null; };
+$('#spEdit').onclick = () => { if (panelObj) editDesc(panelObj.o); };
+$('#spGenTag').onclick = e => { if (panelObj) { const r = e.currentTarget.getBoundingClientRect(); genMenu(r.left, r.top, panelObj.o, 'tag'); } };
+$('#spGenDesc').onclick = e => { if (panelObj) { const r = e.currentTarget.getBoundingClientRect(); genMenu(r.left, r.top, panelObj.o, 'desc'); } };
+$('#spQuick').onclick = () => { if (panelObj) genBothJP(panelObj.o, settings.llmUse); };
+
+/* ---------- LLM 類似度ソート（外部LLMが全ノード画像を2枚ずつ見比べて判定する） ---------- */
+async function pairScoreLLM(prov, base, model, urlA, urlB, signal) {
+  const prompt = '2枚のキャラクター画像の「ポーズ・表情・向き・雰囲気」の類似度を0〜100の整数で判定してください。100が最も似ています。{"score": 数値} のJSONだけを出力してください。';
+  const sys = 'あなたは画像の類似度を判定するアシスタントです。';
+  let txt;
+  if (prov === 'gemini') txt = await gmCall(model, sys, [{ text: prompt }, dataPart(urlA), dataPart(urlB)], { maxTok: 200 }, signal);
+  else if (prov === 'chatgpt') txt = await oaChat(oaBaseOf(), (settings.oaKey || '').trim(), model, sys, [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: urlA } }, { type: 'image_url', image_url: { url: urlB } }], { maxTok: 200 }, signal);
+  else {
+    const r = await lmFetch(base, '/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model, temperature: 0, max_tokens: 200, stream: false, messages: [{ role: 'system', content: sys }, { role: 'user', content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: urlA } }, { type: 'image_url', image_url: { url: urlB } }] }] }) }, 120000, signal);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    txt = lmText(await lmJson(r));
+  }
+  let sc = NaN;
+  try { const m = txt.match(/\{[\s\S]*\}/); sc = +JSON.parse(m ? m[0] : txt).score; } catch (_) {}
+  if (!isFinite(sc)) { const m = txt.match(/\d+(?:\.\d+)?/); if (m) sc = +m[0]; }
+  if (!isFinite(sc)) throw new Error('類似度を読み取れませんでした');
+  return clamp(sc, 0, 100);
+}
+async function arrangeLLM(prov) {
+  if (arranging || genJobs.some(j => j.sortJob)) return toast('並べ替え中です');
+  const list = nodes.filter(n => n.image && media.has(n.image));
+  if (list.length < 2) return toast('画像のあるノードが2件以上必要です');
+  if (llmKeyMissing(prov)) return;
+  const pairs = list.length * (list.length - 1) / 2;
+  if (!confirm(`${list.length} 件の画像を ${PROV_LABEL[prov]} で2枚ずつ見比べて類似度ソートします（${pairs} 回の判定。時間がかかります）。よろしいですか？`)) return;
+  const ac = new AbortController();
+  const job = pushJob(`類似度ソート（${PROV_LABEL[prov]}）`, ac); job.sortJob = true; job.prog = `0/${pairs}`;
+  try {
+    const base = provBaseOf(prov), model = await provModelOf(prov, base, ac.signal);
+    const urls = new Map();
+    for (const n of list) { try { urls.set(n.id, await imgDataUrl(n)); } catch (_) {} }
+    const ok = list.filter(n => urls.has(n.id)), M = ok.length;
+    if (M < 2) throw new Error('画像を読み込めませんでした');
+    const D = Array.from({ length: M }, () => new Float32Array(M));
+    let done = 0; const tot = M * (M - 1) / 2;
+    for (let i = 0; i < M && !ac.signal.aborted; i++) for (let j = i + 1; j < M && !ac.signal.aborted; j++) {
+      const sc = await pairScoreLLM(prov, base, model, urls.get(ok[i].id), urls.get(ok[j].id), ac.signal);
+      D[i][j] = D[j][i] = 100 - sc; done++; job.prog = `${done}/${tot}`; renderQueue();
+    }
+    if (ac.signal.aborted) { toast('類似度ソートを中止しました'); return; }
+    const order = [...orderByDist(normMean(D, M), M).map(i => ok[i]), ...nodes.filter(n => !(n.image && media.has(n.image)))];
+    arranging = true;
+    try {
+      commitHist(); if (lastSnap) lastSnap.view = { ...view };
+      layoutNodes(order, true, null);
+      placeFreeArrows(); fitView(); save(); draw();
+    } finally { arranging = false; }
+    toast(`類似度ソート（${PROV_LABEL[prov]}）で並べ替えました`);
+  } catch (e) { if (!ac.signal.aborted) toast('類似度ソートに失敗しました：' + (e.message || e)); }
+  finally { popJob(job); }
+}
+
 /* ---------- 起動 ---------- */
 function resize() {
   dpr = window.devicePixelRatio || 1; W = innerWidth; H = innerHeight;
@@ -3704,6 +4301,7 @@ window.addEventListener('resize', resize);
 resize();
 view.x = W / 2; view.y = H / 2;
 try { const s = localStorage.getItem(STORE); if (s) deserialize(JSON.parse(s)); } catch (_) {}
+idbRestore();   // IndexedDB に保存された画像・動画を復元する
 lastSnap = takeSnap();
 $('#selBtn').textContent = SEL_ICON[selMode];
 $('#selBtn').title = $('#selBtn').ariaLabel = '選択モード：' + SELMODES[selMode].replace(/^\S+\s*/, '');

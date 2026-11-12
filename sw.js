@@ -1,6 +1,6 @@
 'use strict';
-const CACHE = 'keyframe-map-v36';
-const ASSETS = ['./', './index.html', './about.html', './screenshot.jpg', './manifest.json'];
+const CACHE = 'keyframe-map-v37';
+const ASSETS = ['./', './index.html', './about.html', './manifest.json', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(
